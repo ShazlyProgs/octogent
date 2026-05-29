@@ -28,6 +28,33 @@ const DECK_STATE_PATH = ".octogent/state/deck.json";
 
 const VALID_STATUSES: ReadonlySet<string> = new Set(["idle", "active", "blocked", "needs-review"]);
 
+const VALID_ANIMATIONS: ReadonlySet<string> = new Set([
+  "idle",
+  "sway",
+  "walk",
+  "jog",
+  "swim-up",
+  "bounce",
+  "float",
+]);
+const VALID_EXPRESSIONS: ReadonlySet<string> = new Set([
+  "normal",
+  "happy",
+  "sleepy",
+  "angry",
+  "surprised",
+]);
+const VALID_ACCESSORIES: ReadonlySet<string> = new Set([
+  "none",
+  "long",
+  "mohawk",
+  "side-sweep",
+  "curly",
+]);
+
+const sanitizeOctopusField = (value: unknown, valid: ReadonlySet<string>): string | null =>
+  typeof value === "string" && valid.has(value) ? value : null;
+
 // ─── Deck state (app metadata, separate from agent-facing files) ────────────
 
 type DeckTentacleState = {
@@ -92,9 +119,9 @@ const parseTentacleState = (raw: unknown): DeckTentacleState => {
   };
   if (rec.octopus !== null && typeof rec.octopus === "object") {
     const o = rec.octopus as Record<string, unknown>;
-    if (typeof o.animation === "string") octopus.animation = o.animation;
-    if (typeof o.expression === "string") octopus.expression = o.expression;
-    if (typeof o.accessory === "string") octopus.accessory = o.accessory;
+    octopus.animation = sanitizeOctopusField(o.animation, VALID_ANIMATIONS);
+    octopus.expression = sanitizeOctopusField(o.expression, VALID_EXPRESSIONS);
+    octopus.accessory = sanitizeOctopusField(o.accessory, VALID_ACCESSORIES);
     if (typeof o.hairColor === "string") octopus.hairColor = o.hairColor;
   }
 

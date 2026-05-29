@@ -285,13 +285,20 @@ export const createSessionRuntime = ({
     if (session.statePollTimer) {
       clearInterval(session.statePollTimer);
     }
+    if (session.initialPromptPollTimer) {
+      clearInterval(session.initialPromptPollTimer);
+      session.initialPromptPollTimer = undefined;
+    }
     session.debugLog?.end();
     sessions.delete(sessionId);
     return true;
   };
 
-  const INITIAL_PROMPT_DELAY_MS = 4_000;
-  const INITIAL_PROMPT_SUBMIT_DELAY_MS = 150;
+  const INITIAL_PROMPT_MIN_WAIT_MS = 5_000;
+  const INITIAL_PROMPT_QUIESCENCE_MS = 1_500;
+  const INITIAL_PROMPT_POLL_INTERVAL_MS = 300;
+  const INITIAL_PROMPT_MAX_WAIT_MS = 90_000;
+  const INITIAL_PROMPT_SUBMIT_OFFSETS_MS = [1_500, 4_500, 9_000];
   const BRACKETED_PASTE_START = "\x1b[200~";
   const BRACKETED_PASTE_END = "\x1b[201~";
 
@@ -327,39 +334,89 @@ export const createSessionRuntime = ({
     const bootstrapCommand =
       TERMINAL_BOOTSTRAP_COMMANDS[provider] ?? TERMINAL_BOOTSTRAP_COMMANDS[DEFAULT_AGENT_PROVIDER];
     appendDebugLog(session, `bootstrap session=${sessionId} command=${bootstrapCommand}`);
+    const bootstrapSentAt = Date.now();
+    session.bootstrapAt = bootstrapSentAt;
+    session.lastPtyOutputAt = bootstrapSentAt;
     session.pty.write(`${bootstrapCommand}\r`);
 
-    // Schedule initial prompt injection after Claude Code has had time to boot.
-    if (session.initialPrompt && !session.isInitialPromptSent) {
-      setTimeout(() => {
-        if (session.isInitialPromptSent) {
-          return;
-        }
-        session.isInitialPromptSent = true;
-        appendDebugLog(session, `initial-prompt session=${sessionId}`);
-        const prompt = session.initialPrompt ?? "";
-        session.pty.write(`${BRACKETED_PASTE_START}${prompt}${BRACKETED_PASTE_END}`);
-        setTimeout(() => {
-          if (sessions.get(sessionId) !== session) {
-            return;
-          }
-          appendDebugLog(session, `initial-prompt-submit session=${sessionId}`);
-          session.pty.write("\r");
-        }, INITIAL_PROMPT_SUBMIT_DELAY_MS);
-      }, INITIAL_PROMPT_DELAY_MS);
+    // Defer initial prompt/draft delivery until the agent CLI is quiescent
+    // (no PTY output for a settled period) AND at least the minimum wait has
+    // elapsed. This avoids pasting into the shell or mid-boot, which caused
+    // prompts to be echoed verbatim instead of executed.
+    const hasPrompt = Boolean(session.initialPrompt) && !session.isInitialPromptSent;
+    const hasDraft =
+      Boolean(session.initialInputDraft) &&
+      !session.isInitialInputDraftSent &&
+      !session.initialPrompt;
+
+    if (!hasPrompt && !hasDraft) {
+      return;
     }
 
-    if (session.initialInputDraft && !session.isInitialInputDraftSent && !session.initialPrompt) {
-      setTimeout(() => {
-        if (session.isInitialInputDraftSent) {
-          return;
+    const attemptInitialDelivery = () => {
+      if (sessions.get(sessionId) !== session) {
+        if (session.initialPromptPollTimer) {
+          clearInterval(session.initialPromptPollTimer);
+          session.initialPromptPollTimer = undefined;
         }
+        return;
+      }
+
+      const now = Date.now();
+      const elapsedSinceBootstrap = now - (session.bootstrapAt ?? now);
+      const elapsedSinceLastOutput = now - (session.lastPtyOutputAt ?? now);
+      const quiescenceReached =
+        elapsedSinceBootstrap >= INITIAL_PROMPT_MIN_WAIT_MS &&
+        elapsedSinceLastOutput >= INITIAL_PROMPT_QUIESCENCE_MS;
+      const timeoutReached = elapsedSinceBootstrap >= INITIAL_PROMPT_MAX_WAIT_MS;
+
+      if (!quiescenceReached && !timeoutReached) {
+        return;
+      }
+
+      if (session.initialPromptPollTimer) {
+        clearInterval(session.initialPromptPollTimer);
+        session.initialPromptPollTimer = undefined;
+      }
+
+      appendDebugLog(
+        session,
+        `initial-deliver session=${sessionId} elapsed=${elapsedSinceBootstrap} quiet=${elapsedSinceLastOutput} reason=${quiescenceReached ? "quiescence" : "timeout"}`,
+      );
+
+      if (session.initialPrompt && !session.isInitialPromptSent) {
+        session.isInitialPromptSent = true;
+        const prompt = session.initialPrompt ?? "";
+        session.pty.write(`${BRACKETED_PASTE_START}${prompt}${BRACKETED_PASTE_END}`);
+        // Claude Code ≥2.1 collapses multi-line pastes into a preview
+        // placeholder that needs Enter to send. Under concurrent cold-boots
+        // (e.g. a swarm spawning N scanners at once) a single Enter sometimes
+        // races the paste-preview render. Send \r at several offsets so at
+        // least one lands after the widget is ready. Extra Enters on a
+        // now-empty input buffer are harmless no-ops.
+        for (const offset of INITIAL_PROMPT_SUBMIT_OFFSETS_MS) {
+          setTimeout(() => {
+            if (sessions.get(sessionId) !== session) {
+              return;
+            }
+            appendDebugLog(session, `initial-prompt-submit session=${sessionId} offset=${offset}`);
+            session.pty.write("\r");
+          }, offset);
+        }
+        return;
+      }
+
+      if (session.initialInputDraft && !session.isInitialInputDraftSent) {
         session.isInitialInputDraftSent = true;
-        appendDebugLog(session, `initial-input-draft session=${sessionId}`);
         const draft = session.initialInputDraft ?? "";
         session.pty.write(`${BRACKETED_PASTE_START}${draft}${BRACKETED_PASTE_END}`);
-      }, INITIAL_PROMPT_DELAY_MS);
-    }
+      }
+    };
+
+    session.initialPromptPollTimer = setInterval(
+      attemptInitialDelivery,
+      INITIAL_PROMPT_POLL_INTERVAL_MS,
+    );
   };
 
   const ensureSession = (sessionId: string, tentacleId: string) => {
@@ -430,6 +487,7 @@ export const createSessionRuntime = ({
 
     session.pty.onData((chunk) => {
       appendDebugLog(session, `pty-output session=${sessionId} chunk=${JSON.stringify(chunk)}`);
+      session.lastPtyOutputAt = Date.now();
       appendScrollback(session, chunk);
       const nextState = session.stateTracker.observeChunk(chunk, Date.now());
       broadcastMessage(session, {
@@ -464,6 +522,10 @@ export const createSessionRuntime = ({
       });
       if (session.statePollTimer) {
         clearInterval(session.statePollTimer);
+      }
+      if (session.initialPromptPollTimer) {
+        clearInterval(session.initialPromptPollTimer);
+        session.initialPromptPollTimer = undefined;
       }
       session.debugLog?.end();
       sessions.delete(sessionId);
@@ -529,7 +591,22 @@ export const createSessionRuntime = ({
               session,
               `ws-input session=${sessionId} data=${JSON.stringify(payload.data)}`,
             );
-            session.pty.write(payload.data);
+            // Server-side bracketed-paste guard: when the WS payload is
+            // multi-line or large, treat it as a paste and wrap it. xterm.js
+            // only auto-wraps when Claude Code has emitted \x1b[?2004h and
+            // the mode is currently active — during phases like the post-2.1
+            // preview-placeholder, TOS dialogs, or trust prompts, that mode
+            // can be off and pastes arrive raw. Wrapping here is idempotent
+            // (we skip if already wrapped) and matches the contract the
+            // initialPrompt path uses.
+            const inputData = payload.data;
+            const looksLikePaste = inputData.length > 80 || /\n/.test(inputData);
+            const alreadyWrapped = inputData.startsWith(BRACKETED_PASTE_START);
+            const ptyData =
+              looksLikePaste && !alreadyWrapped
+                ? `${BRACKETED_PASTE_START}${inputData}${BRACKETED_PASTE_END}`
+                : inputData;
+            session.pty.write(ptyData);
             if (/[\r\n]/.test(payload.data)) {
               emitStateIfChanged(
                 session,

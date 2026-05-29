@@ -1,9 +1,10 @@
-import { Terminal, X } from "lucide-react";
+import { Sparkles, Terminal, X } from "lucide-react";
 import { type Ref, useCallback, useMemo, useState } from "react";
 
 import type { DeckTentacleSummary, TentacleWorkspaceMode } from "@octogent/core";
 import type { GraphNode } from "../../app/canvas/types";
 import type { ConversationSessionSummary } from "../../app/types";
+import { AGENT_PRESETS } from "../../app/vault-structure";
 import {
   buildDeckTodoAddUrl,
   buildDeckTodoDeleteUrl,
@@ -78,11 +79,15 @@ type CanvasTentaclePanelProps = {
   panelRef?: Ref<HTMLDivElement> | undefined;
   tentacle: DeckTentacleSummary | null;
   sessions: ConversationSessionSummary[];
-  onCreateAgent?: ((tentacleId: string) => void) | undefined;
   onSolveTodoItem?: ((tentacleId: string, itemIndex: number) => void) | undefined;
-  onSpawnSwarm?: ((tentacleId: string, workspaceMode: TentacleWorkspaceMode) => void) | undefined;
   onNavigateToConversation?: ((sessionId: string) => void) | undefined;
   onRefreshTentacleData?: (() => Promise<void>) | undefined;
+  /**
+   * Fire a preset-driven summon. Called when the user clicks a preset button
+   * on a host tentacle (e.g. "Summon VaultSyncAgent" on the VaultAgent panel).
+   * Parent resolves the preset → buckets, purpose, promptTemplate.
+   */
+  onSummonPreset?: ((hostTentacleId: string, presetId: string) => void) | undefined;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -114,11 +119,10 @@ export const CanvasTentaclePanel = ({
   panelRef,
   tentacle,
   sessions,
-  onCreateAgent,
   onSolveTodoItem,
-  onSpawnSwarm,
   onNavigateToConversation,
   onRefreshTentacleData,
+  onSummonPreset,
 }: CanvasTentaclePanelProps) => {
   const visuals = useMemo(() => (tentacle ? deriveVisuals(tentacle) : null), [tentacle]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -288,28 +292,36 @@ export const CanvasTentaclePanel = ({
         <div className="detail-section">
           <div className="detail-section-title">Actions</div>
           <div className="detail-actions">
-            <button
-              type="button"
-              className="detail-action-btn"
-              onClick={() => onCreateAgent?.(node.tentacleId)}
-            >
-              &gt;_ Create Agent
-            </button>
-            <button
-              type="button"
-              className="detail-action-btn"
-              onClick={() => onSpawnSwarm?.(node.tentacleId, "worktree")}
-            >
-              &#x2263; Spawn Swarm (Worktrees)
-            </button>
-            <button
-              type="button"
-              className="detail-action-btn"
-              onClick={() => onSpawnSwarm?.(node.tentacleId, "shared")}
-            >
-              &#x2263; Spawn Swarm (Normal)
-            </button>
+            {node.tentacleId === "vaultagent" &&
+              AGENT_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="detail-action-btn"
+                  title={preset.tagline}
+                  onClick={() => onSummonPreset?.(node.tentacleId, preset.id)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <Sparkles size={12} /> Summon {preset.displayName}
+                </button>
+              ))}
           </div>
+          {node.tentacleId === "vaultagent" && AGENT_PRESETS.length > 0 && (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 11,
+                color: "#888",
+                lineHeight: 1.4,
+              }}
+            >
+              {AGENT_PRESETS[0]?.tagline}
+            </div>
+          )}
         </div>
 
         {/* Progress section */}

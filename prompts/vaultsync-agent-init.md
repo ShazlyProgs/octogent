@@ -142,7 +142,7 @@ Sequence strictly:
 1. **Never `git push`** — never, under any mode. Always local commits only.
 2. **Never run `git` from `$VAULT` root** — only from `$REPOS` or deeper.
 3. **Never modify code files** (`*.ts`, `*.py`, `*.tsx`, etc.) — only docs, memory, governance, prompts, skills, canvas, JSON config for UI. Code changes go through `POST /api/execute` per Validation Period Rule.
-4. **Commit Time Guard** — 8:30-18:00 CET Mon-Fri blocked for auto-commit. If blocked, stage changes; defer commit; note in report.
+4. ~~**Commit Time Guard**~~ — RETIRED 2026-05-02 (Mohamed out of employment); commits unrestricted by time-of-day.
 5. **Path allowlist for apply mode** — `$VAULT/**`, `$REPOS/.octogent/**`, `$OCTOGENT/prompts/**`, `$OCTOGENT/*.md`, `$OCTOGENT/apps/web/src/app/vault-structure.ts`. Anything else requires Tier-2 approval even if scanner tagged it Tier-1.
 6. **Scope guard** — anything outside `$VAULT` or `$REPOS` → refuse, block, mark as advisory.
 7. **One question at a time** when asking Mohamed via parent.
@@ -162,7 +162,7 @@ Sequence strictly:
 | MANIFEST priority-0 read fails | Abort; report MANIFEST corruption as Tier-3 advisory |
 | Git working tree has uncommitted changes from another session | Refuse apply mode; run dry-run only; report conflict |
 | Octogent child cap reached (>9 scanners at once) | Chunk scanners into waves |
-| Commit Time Guard blocks commit | Stage + leave for next window; report in close note |
+| ~~Commit Time Guard blocks commit~~ | (rule retired 2026-05-02 — no longer applicable) |
 
 ---
 

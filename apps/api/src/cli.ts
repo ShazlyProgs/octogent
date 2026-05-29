@@ -221,6 +221,8 @@ const startServer = async () => {
   const promptsDir = resolveRuntimeAssetPath(["dist", "prompts"], ["prompts"]);
   const webDistDir = resolveRuntimeAssetPath(["dist", "web"], ["apps", "web", "dist"]);
   const port = await findOpenPort(readPreferredStartPort());
+  const { detectVaultRoot } = await import("./terminalRuntime/vaultRoot");
+  const vaultRoot = detectVaultRoot(workspaceCwd);
   const { createApiServer } = await import("./createApiServer");
 
   const apiServer = createApiServer({
@@ -229,6 +231,7 @@ const startServer = async () => {
     promptsDir,
     webDistDir: existsSync(webDistDir) ? webDistDir : undefined,
     allowRemoteAccess: process.env.OCTOGENT_ALLOW_REMOTE_ACCESS === "1",
+    ...(vaultRoot ? { vaultRoot } : {}),
   });
 
   const shutdown = async () => {
@@ -404,6 +407,7 @@ const terminalCreate = async () => {
   const autoRenamePromptContext = parseFlag("--auto-rename-prompt-context");
   const promptTemplate = parseFlag("--prompt-template");
   const promptVariables = parseJsonFlag("--prompt-variables");
+  const cwdScope = parseFlag("--cwd-scope");
   const apiBase = resolveRuntimeApiBase();
 
   const body: Record<string, unknown> = {};
@@ -418,6 +422,7 @@ const terminalCreate = async () => {
   if (autoRenamePromptContext) body.autoRenamePromptContext = autoRenamePromptContext;
   if (promptTemplate) body.promptTemplate = promptTemplate;
   if (promptVariables) body.promptVariables = promptVariables;
+  if (cwdScope === "vault") body.cwdScope = "vault";
 
   try {
     const response = await fetch(`${apiBase}/api/terminals`, {
@@ -513,8 +518,12 @@ const channelList = async () => {
 
     for (const message of messages) {
       const status = message.delivered ? "delivered" : "pending";
+      const fromDisplay =
+        (typeof message.fromTerminalName === "string" && message.fromTerminalName) ||
+        message.fromTerminalId ||
+        "(unknown)";
       console.log(
-        `  [${message.messageId}] from=${message.fromTerminalId || "(unknown)"} status=${status}: ${message.content}`,
+        `  [${message.messageId}] from=${fromDisplay} status=${status}: ${message.content}`,
       );
     }
   } catch {

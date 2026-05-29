@@ -75,6 +75,9 @@ export type TerminalSession = {
   keepAliveWithoutClients?: boolean;
   hasSeenProcessing?: boolean;
   lastToolName?: string | undefined;
+  bootstrapAt?: number;
+  lastPtyOutputAt?: number;
+  initialPromptPollTimer?: ReturnType<typeof setInterval>;
 };
 
 export type TerminalNameOrigin = "generated" | "user" | "prompt";
@@ -104,6 +107,14 @@ export type PersistedTerminal = {
   initialInputDraft?: string;
   lastActiveAt?: string;
   parentTerminalId?: string;
+  /**
+   * Optional cwd scope override for the spawned Claude process.
+   * "vault" → cwd = detected vault root (restores auto-memory + claude-mem
+   *           + CLAUDE.md chain + governance hooks parity with Mohamed's
+   *           pre-octogent Claude Code experience).
+   * undefined → fall back to worktree path (worktree mode) or workspaceCwd.
+   */
+  cwdScope?: "vault";
 };
 
 export type GitClientPullRequestSnapshot = Omit<

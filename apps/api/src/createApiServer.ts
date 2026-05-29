@@ -34,7 +34,8 @@ export const createApiServer = ({
   monitorService,
   invalidateClaudeUsageCache = invalidateUsageCacheDefault,
   allowRemoteAccess = false,
-}: CreateApiServerOptions = {}) => {
+  vaultRoot,
+}: CreateApiServerOptions & { vaultRoot?: string | undefined } = {}) => {
   const resolvedWorkspaceCwd = workspaceCwd ?? process.cwd();
   // State lives in ~/.octogent/projects/<name>/ when provided, else falls back to <project>/.octogent/
   const resolvedStateDir = projectStateDir ?? join(resolvedWorkspaceCwd, ".octogent");
@@ -97,6 +98,7 @@ export const createApiServer = ({
     workspaceCwd: resolvedWorkspaceCwd,
     projectStateDir: resolvedStateDir,
     getApiBaseUrl,
+    ...(vaultRoot ? { vaultRoot } : {}),
   };
   if (gitClient) {
     runtimeOptions.gitClient = gitClient;

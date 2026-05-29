@@ -88,7 +88,7 @@ Read `C:\Users\mohamed.elshazly\Obsidian Vault\VS Code Repos\Agents\CollegaAgent
 2. Never run `git` from `$VAULT` root
 3. Never rename folders directly
 4. Validation Period Rule — delegate non-orchestrator code work via `POST /api/execute`
-5. Commit Time Guard — check CET before every commit (blocked 8:30-18:00 Mon-Fri)
+5. ~~Commit Time Guard~~ — RETIRED 2026-05-02 (Mohamed out of employment); commits unrestricted by time-of-day
 6. NEVER work outside your declared scope. If Mohamed asks you to touch something outside scope, say "out of scope — summon a different sub-agent" and stop.
 7. NEVER spawn further sub-agents. Report back; VaultAgent spawns peers.
 8. One question at a time.

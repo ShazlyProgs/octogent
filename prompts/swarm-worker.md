@@ -18,6 +18,13 @@ The tentacle context folder with background on your task area lives on the main 
 
 Before writing any code, read `CONTEXT.md` and any other `.md` files in that folder for orientation. Use this context to understand the area of the codebase you're working in, but verify claims against actual code — context files may be outdated.
 
+## Workspace Conventions
+
+This workspace contains multiple Collega AI SRL products. Each has its own `CLAUDE.md` — read it before modifying code. Key rules:
+- **CollegaOrchestration** (repo: `Agents/CollegaAgents/`): Biome lint, DB imports from barrel only (`db.ts`), server imports use `.ts` extensions, vitest with `pool: "forks"`
+- **CollegaRAG** (repo: `Collega/`): pytest, FastAPI, no CLAUDE.md by design
+- Run tests + lint for whatever you changed before reporting done
+
 ## Working Guidelines
 
 {{workspaceGuidelines}}

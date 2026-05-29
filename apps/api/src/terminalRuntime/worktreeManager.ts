@@ -37,7 +37,8 @@ export const createWorktreeManager = ({
   workspaceCwd,
   gitClient,
   terminals,
-}: CreateWorktreeManagerOptions) => {
+  vaultRoot,
+}: CreateWorktreeManagerOptions & { vaultRoot?: string | undefined }) => {
   const getTentacleWorktreePath = (tentacleId: string) =>
     join(workspaceCwd, TENTACLE_WORKTREE_RELATIVE_PATH, tentacleId);
   const getTentacleBranchName = (tentacleId: string) =>
@@ -51,6 +52,10 @@ export const createWorktreeManager = ({
 
     if (terminal.workspaceMode === "worktree") {
       return getTentacleWorktreePath(worktreeIdentifier);
+    }
+
+    if (terminal.cwdScope === "vault" && vaultRoot) {
+      return vaultRoot;
     }
 
     return workspaceCwd;

@@ -16,7 +16,7 @@ declare module "ws" {
   type HandleUpgradeCallback = (websocket: WebSocket) => void;
 
   export class WebSocketServer extends EventEmitter {
-    constructor(options: { noServer: true });
+    constructor(options: { noServer: true; perMessageDeflate?: boolean });
     handleUpgrade(
       request: IncomingMessage,
       socket: Duplex,

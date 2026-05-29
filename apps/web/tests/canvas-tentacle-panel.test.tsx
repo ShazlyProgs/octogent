@@ -32,45 +32,6 @@ describe("CanvasTentaclePanel actions", () => {
     vi.restoreAllMocks();
   });
 
-  it("offers worktree and normal swarm options", async () => {
-    const onSpawnSwarm = vi.fn();
-
-    render(
-      <CanvasTentaclePanel
-        node={{
-          id: "docs-knowledge",
-          type: "tentacle",
-          x: 0,
-          y: 0,
-          vx: 0,
-          vy: 0,
-          pinned: false,
-          radius: 48,
-          tentacleId: "docs-knowledge",
-          label: "Docs & Knowledge",
-          color: "#ff6b2b",
-        }}
-        tentacle={tentacle}
-        sessions={[]}
-        onClose={() => {}}
-        onSpawnSwarm={onSpawnSwarm}
-      />,
-    );
-
-    const worktreeButton = await screen.findByRole("button", {
-      name: /spawn swarm \(worktrees\)/i,
-    });
-    const normalButton = await screen.findByRole("button", {
-      name: /spawn swarm \(normal\)/i,
-    });
-
-    fireEvent.click(worktreeButton);
-    fireEvent.click(normalButton);
-
-    expect(onSpawnSwarm).toHaveBeenNthCalledWith(1, "docs-knowledge", "worktree");
-    expect(onSpawnSwarm).toHaveBeenNthCalledWith(2, "docs-knowledge", "shared");
-  });
-
   it("spawns a dedicated agent for an individual todo item", async () => {
     const onSolveTodoItem = vi.fn();
 

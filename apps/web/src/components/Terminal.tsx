@@ -133,6 +133,27 @@ export const Terminal = ({
     } | null = null;
     let pendingHistoryData: string | null = null;
     const pendingOutputChunks: string[] = [];
+    const pendingInputChunks: string[] = [];
+    const PENDING_INPUT_MAX_CHARS = 64 * 1024;
+    let pendingInputChars = 0;
+
+    const enqueuePendingInput = (data: string) => {
+      if (pendingInputChars + data.length > PENDING_INPUT_MAX_CHARS) {
+        return;
+      }
+      pendingInputChunks.push(data);
+      pendingInputChars += data.length;
+    };
+
+    const flushPendingInput = (target: WebSocket) => {
+      if (pendingInputChunks.length === 0 || target.readyState !== 1) {
+        return;
+      }
+      const payload = pendingInputChunks.join("");
+      pendingInputChunks.length = 0;
+      pendingInputChars = 0;
+      target.send(JSON.stringify({ type: "input", data: payload }));
+    };
 
     const connect = () => {
       const nextSocket = new WebSocket(buildTerminalSocketUrl(terminalId));
@@ -146,6 +167,7 @@ export const Terminal = ({
         socketRef.current = nextSocket;
         setConnectionState("connected");
         requestResizeSync();
+        flushPendingInput(nextSocket);
       });
 
       nextSocket.addEventListener("close", () => {
@@ -366,6 +388,7 @@ export const Terminal = ({
 
         const onDataDisposable = terminal.onData((data) => {
           if (!socket || socket.readyState !== 1) {
+            enqueuePendingInput(data);
             return;
           }
 

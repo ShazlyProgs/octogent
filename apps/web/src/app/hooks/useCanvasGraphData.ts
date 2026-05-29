@@ -253,9 +253,22 @@ export const useCanvasGraphData = ({
   }
 
   // Build tentacle list: only deck tentacles (sandbox and other non-deck
-  // terminals are excluded from the graph).
+  // terminals are excluded from the graph). A tentacle is treated as "rooted"
+  // (and rendered around the center with a tentacle circle) only when it has
+  // at least one terminal that is itself a root (no parentTerminalId).
+  // Tentacles whose terminals are all sub-agents of a parent tentacle are
+  // sub-trees, not independent roots — rendering them as floating center
+  // orbiters would visually disconnect sub-agents from their real parent.
   const allTentacleIds: string[] = [];
   for (const dt of deckTentacles) {
+    const terminals = activeTerminalsByTentacle.get(dt.tentacleId);
+    const hasRootTerminal =
+      !terminals ||
+      terminals.length === 0 ||
+      terminals.some((t) => !t.parentTerminalId);
+    if (!hasRootTerminal) {
+      continue;
+    }
     allTentacleIds.push(dt.tentacleId);
     seenTentacleIds.add(dt.tentacleId);
   }
@@ -335,6 +348,58 @@ export const useCanvasGraphData = ({
     }
   }
 
+  // Second pass: terminals whose tentacle was filtered out as non-root (all
+  // children-of-parents — e.g. a swarm coordinator's tentacle tag). Render
+  // each as a session node attached to its parent terminal's session node so
+  // the sub-tree is visually connected to its real parent, not floating.
+  for (const terminal of columns) {
+    if (seenTentacleIds.has(terminal.tentacleId)) {
+      continue;
+    }
+    if (terminal.tentacleId === OCTOBOSS_ID) {
+      continue;
+    }
+    if (!terminal.parentTerminalId) {
+      continue;
+    }
+    const sessionNodeId = buildActiveSessionNodeId(terminal.terminalId);
+    if (currentNodesById.has(sessionNodeId)) {
+      continue;
+    }
+    const parentNodeId = buildActiveSessionNodeId(terminal.parentTerminalId);
+    const parentNode = currentNodesById.get(parentNodeId);
+    if (!parentNode) {
+      continue;
+    }
+    const prevSession = prevNodes.get(sessionNodeId);
+    const jitter = () => (Math.random() - 0.5) * 60;
+    const runtimeInfo = agentRuntimeStates?.get(terminal.terminalId);
+    const color = tentacleColor(terminal.tentacleId, deckMap.get(terminal.tentacleId)?.color);
+    const sessionNode: GraphNode = {
+      id: sessionNodeId,
+      type: "active-session",
+      x: prevSession?.x ?? parentNode.x + jitter(),
+      y: prevSession?.y ?? parentNode.y + jitter(),
+      vx: prevSession?.vx ?? 0,
+      vy: prevSession?.vy ?? 0,
+      pinned: prevSession?.pinned ?? false,
+      radius: ACTIVE_SESSION_RADIUS,
+      tentacleId: terminal.tentacleId,
+      label: terminal.tentacleName || terminal.terminalId,
+      color,
+      sessionId: terminal.terminalId,
+      agentState: terminal.state,
+      hasUserPrompt: terminal.hasUserPrompt ?? false,
+      ...(terminal.workspaceMode ? { workspaceMode: terminal.workspaceMode } : {}),
+      ...(terminal.parentTerminalId ? { parentTerminalId: terminal.parentTerminalId } : {}),
+      ...(runtimeInfo ? { agentRuntimeState: runtimeInfo.state } : {}),
+      ...(runtimeInfo?.toolName ? { waitingToolName: runtimeInfo.toolName } : {}),
+    };
+    nodes.push(sessionNode);
+    currentNodesById.set(sessionNodeId, sessionNode);
+    edges.push({ source: parentNodeId, target: sessionNodeId });
+  }
+
   // Octoboss — synthetic always-present node
   const prevBoss = prevNodes.get(OCTOBOSS_NODE_ID);
   const octobossColor = getAccentPrimary();
@@ -348,7 +413,7 @@ export const useCanvasGraphData = ({
     pinned: prevBoss?.pinned ?? false,
     radius: OCTOBOSS_RADIUS,
     tentacleId: OCTOBOSS_ID,
-    label: "Octoboss",
+    label: "ShazlyBossAgent",
     color: octobossColor,
   };
   nodes.push(octobossNode);

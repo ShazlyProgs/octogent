@@ -195,7 +195,7 @@ export const RuntimeStatusStrip = ({
           expression="normal"
           scale={2}
         />
-        <span className="console-status-brand">OCTOGENT</span>
+        <span className="console-status-brand">SHAZLYAGENT</span>
       </div>
       <div className="console-status-charts">
         <div className="console-status-sparkline" aria-label="Commits per day over last 30 days">

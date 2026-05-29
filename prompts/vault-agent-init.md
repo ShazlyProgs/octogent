@@ -108,7 +108,7 @@ curl -s http://127.0.0.1:{{apiPort}}/api/terminal-snapshots
 2. Never run `git` from `$VAULT` root — only from `$REPOS` or deeper
 3. Never rename folders directly — use `$OCTOGENT/REPOS.md` + rename procedure
 4. Validation Period Rule (ACTIVE) — delegate non-orchestrator code work via `POST http://localhost:3001/api/execute`
-5. Commit Time Guard — check current CET before every commit; block 8:30-18:00 Mon-Fri
+5. ~~Commit Time Guard~~ — RETIRED 2026-05-02 (Mohamed out of employment); commits unrestricted by time-of-day
 6. One domain per tentacle; long-running processes in `shared` mode
 7. 9-child cap per parent
 8. One question at a time when asking Mohamed

@@ -100,10 +100,23 @@ export const handleDeckTentaclesRoute: ApiRouteHandler = async (
       body && typeof body.octopus === "object" && body.octopus !== null
         ? (body.octopus as Record<string, unknown>)
         : {};
+    const VALID_ANIMATIONS = new Set([
+      "idle",
+      "sway",
+      "walk",
+      "jog",
+      "swim-up",
+      "bounce",
+      "float",
+    ]);
+    const VALID_EXPRESSIONS = new Set(["normal", "happy", "sleepy", "angry", "surprised"]);
+    const VALID_ACCESSORIES = new Set(["none", "long", "mohawk", "side-sweep", "curly"]);
+    const pickValid = (value: unknown, valid: Set<string>) =>
+      typeof value === "string" && valid.has(value) ? value : null;
     const octopus = {
-      animation: typeof rawOctopus.animation === "string" ? rawOctopus.animation : null,
-      expression: typeof rawOctopus.expression === "string" ? rawOctopus.expression : null,
-      accessory: typeof rawOctopus.accessory === "string" ? rawOctopus.accessory : null,
+      animation: pickValid(rawOctopus.animation, VALID_ANIMATIONS),
+      expression: pickValid(rawOctopus.expression, VALID_EXPRESSIONS),
+      accessory: pickValid(rawOctopus.accessory, VALID_ACCESSORIES),
       hairColor: typeof rawOctopus.hairColor === "string" ? rawOctopus.hairColor : null,
     };
 

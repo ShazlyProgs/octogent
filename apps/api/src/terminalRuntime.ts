@@ -59,11 +59,15 @@ export const createTerminalRuntime = ({
   projectStateDir,
   gitClient = createDefaultGitClient(),
   getApiBaseUrl = () => process.env.OCTOGENT_API_ORIGIN ?? "http://127.0.0.1:8787",
-}: CreateTerminalRuntimeOptions) => {
+  vaultRoot,
+}: CreateTerminalRuntimeOptions & { vaultRoot?: string | undefined }) => {
   const stateDir = projectStateDir ?? join(workspaceCwd, ".octogent");
   const sessions = new Map<string, TerminalSession>();
-  const websocketServer = new WebSocketServer({ noServer: true });
-  const terminalEventsWebsocketServer = new WebSocketServer({ noServer: true });
+  const websocketServer = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+  const terminalEventsWebsocketServer = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+  });
   const terminalEventClients = new Set<WebSocket>();
   const registryPath = join(stateDir, "state", "tentacles.json");
   const registryState = loadTerminalRegistry(registryPath);
@@ -85,6 +89,7 @@ export const createTerminalRuntime = ({
     workspaceCwd,
     gitClient,
     terminals,
+    vaultRoot,
   });
 
   const resolveTerminalSession = (
@@ -146,6 +151,7 @@ export const createTerminalRuntime = ({
     persistRegistry,
     deliverChannelMessages: channelMessaging.deliverChannelMessages,
     onStateChange: broadcastTerminalStateChanged,
+    ...(vaultRoot ? { vaultRoot } : {}),
   });
 
   const allocateTerminalId = () => {
@@ -256,6 +262,7 @@ export const createTerminalRuntime = ({
     parentTerminalId,
     nameOrigin,
     autoRenamePromptContext,
+    cwdScope: requestedCwdScope,
   }: {
     terminalId?: string;
     tentacleId?: string;
@@ -269,6 +276,7 @@ export const createTerminalRuntime = ({
     parentTerminalId?: string;
     nameOrigin?: TerminalNameOrigin;
     autoRenamePromptContext?: string;
+    cwdScope?: "vault";
   }): TerminalSnapshot => {
     // Enforce max children per parent.
     if (parentTerminalId) {
@@ -296,6 +304,13 @@ export const createTerminalRuntime = ({
     const worktreeId =
       requestedWorktreeId ?? (workspaceMode === "worktree" ? terminalId : undefined);
 
+    // cwdScope inheritance: if no explicit scope requested and the parent is
+    // vault-scoped, inherit vault scope so entire subtrees stay anchored to
+    // the vault root — that's the whole point of spawning a sub-agent.
+    const parentTerminal = parentTerminalId ? terminals.get(parentTerminalId) : undefined;
+    const inheritedCwdScope = parentTerminal?.cwdScope;
+    const resolvedCwdScope = requestedCwdScope ?? inheritedCwdScope;
+
     const terminal: PersistedTerminal = {
       terminalId,
       tentacleId,
@@ -310,6 +325,7 @@ export const createTerminalRuntime = ({
       ...(initialInputDraft ? { initialInputDraft } : {}),
       ...(initialPrompt ? { lastActiveAt: new Date().toISOString() } : {}),
       ...(parentTerminalId ? { parentTerminalId } : {}),
+      ...(resolvedCwdScope ? { cwdScope: resolvedCwdScope } : {}),
     };
 
     const effectiveWorktreeId = worktreeId ?? tentacleId;
@@ -319,11 +335,14 @@ export const createTerminalRuntime = ({
     }
 
     if (terminal.agentProvider === "claude-code") {
-      // Claude hooks should only be installed for Claude-backed terminals.
+      // Claude hooks only apply to Claude-backed terminals. Install them in
+      // the directory Claude will actually start in so they're picked up.
       try {
         const hookTargetCwd = shouldCreateWorktree
           ? worktreeManager.getTentacleWorkspaceCwd(effectiveWorktreeId)
-          : workspaceCwd;
+          : resolvedCwdScope === "vault" && vaultRoot
+            ? vaultRoot
+            : workspaceCwd;
         hookProcessor.installHooksInDirectory(hookTargetCwd);
       } catch {
         // Best-effort: hook installation should not block terminal creation.
@@ -367,6 +386,8 @@ export const createTerminalRuntime = ({
       }
       return snapshots;
     },
+
+    allocateTerminalId,
 
     listConversationSessions() {
       return listConversationSessions(transcriptDirectoryPath);

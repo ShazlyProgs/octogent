@@ -27,6 +27,45 @@ export const ACCESSORIES: OctopusAccessory[] = [
   "curly",
 ];
 
+const VALID_ANIMATIONS = new Set<OctopusAnimation>([
+  "idle",
+  "sway",
+  "walk",
+  "jog",
+  "swim-up",
+  "bounce",
+  "float",
+]);
+const VALID_EXPRESSIONS = new Set<OctopusExpression>([
+  "normal",
+  "happy",
+  "sleepy",
+  "angry",
+  "surprised",
+]);
+const VALID_ACCESSORIES = new Set<OctopusAccessory>([
+  "none",
+  "long",
+  "mohawk",
+  "side-sweep",
+  "curly",
+]);
+
+const asValidAnimation = (value: unknown): OctopusAnimation | null =>
+  typeof value === "string" && VALID_ANIMATIONS.has(value as OctopusAnimation)
+    ? (value as OctopusAnimation)
+    : null;
+
+const asValidExpression = (value: unknown): OctopusExpression | null =>
+  typeof value === "string" && VALID_EXPRESSIONS.has(value as OctopusExpression)
+    ? (value as OctopusExpression)
+    : null;
+
+const asValidAccessory = (value: unknown): OctopusAccessory | null =>
+  typeof value === "string" && VALID_ACCESSORIES.has(value as OctopusAccessory)
+    ? (value as OctopusAccessory)
+    : null;
+
 export function hashString(str: string): number {
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -59,13 +98,13 @@ export function deriveOctopusVisuals(tentacle: DeckTentacleSummary): OctopusVisu
       tentacle.color ??
       (OCTOPUS_COLORS[hashString(tentacle.tentacleId) % OCTOPUS_COLORS.length] as string),
     animation:
-      (stored?.animation as OctopusAnimation | null) ??
+      asValidAnimation(stored?.animation) ??
       (ANIMATIONS[Math.floor(rng() * ANIMATIONS.length)] as OctopusAnimation),
     expression:
-      (stored?.expression as OctopusExpression | null) ??
+      asValidExpression(stored?.expression) ??
       (EXPRESSIONS[Math.floor(rng() * EXPRESSIONS.length)] as OctopusExpression),
     accessory:
-      (stored?.accessory as OctopusAccessory | null) ??
+      asValidAccessory(stored?.accessory) ??
       (ACCESSORIES[Math.floor(rng() * ACCESSORIES.length)] as OctopusAccessory),
     hairColor: stored?.hairColor ?? undefined,
   };

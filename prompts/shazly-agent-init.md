@@ -114,7 +114,7 @@ Full constitution in `$VAULT/.shazly/IDENTITY.md`. Top-10:
 2. Never run `git` from `$VAULT` root — only from `$REPOS` or deeper
 3. Never rename folders directly — use REPOS.md + rename procedure
 4. Validation Period Rule (ACTIVE) — delegate non-orchestrator code work via `POST /api/execute`
-5. Commit Time Guard — 8:30-18:00 CET Mon-Fri blocked for personal-project commits
+5. ~~Commit Time Guard~~ — RETIRED 2026-05-02 (Mohamed out of employment); commits unrestricted by time-of-day
 6. One domain per tentacle; long-running processes in `shared` mode
 7. 9-child cap per parent
 8. One question at a time when asking Mohamed

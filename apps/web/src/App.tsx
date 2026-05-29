@@ -9,7 +9,6 @@ import { useConsoleKeyboardShortcuts } from "./app/hooks/useConsoleKeyboardShort
 import { useGitHubPrimaryViewModel } from "./app/hooks/useGitHubPrimaryViewModel";
 import { useGithubSummaryPolling } from "./app/hooks/useGithubSummaryPolling";
 import { useInitialColumnsHydration } from "./app/hooks/useInitialColumnsHydration";
-import { useMonitorRuntime } from "./app/hooks/useMonitorRuntime";
 import { usePersistedUiState } from "./app/hooks/usePersistedUiState";
 import { useTentacleGitLifecycle } from "./app/hooks/useTentacleGitLifecycle";
 import { useTerminalCompletionNotification } from "./app/hooks/useTerminalCompletionNotification";
@@ -24,13 +23,13 @@ import {
   stripTerminalRuntimeStates,
 } from "./app/terminalRuntimeStateStore";
 import type { TerminalView } from "./app/types";
+import { getBucketsById } from "./app/vault-structure";
 import { clampSidebarWidth } from "./app/uiStateNormalizers";
 import { ActiveAgentsSidebar } from "./components/ActiveAgentsSidebar";
 import { ConsolePrimaryNav } from "./components/ConsolePrimaryNav";
 import { PrimaryViewRouter } from "./components/PrimaryViewRouter";
 import { RuntimeStatusStrip } from "./components/RuntimeStatusStrip";
 import { SidebarActionPanel } from "./components/SidebarActionPanel";
-import { TelemetryTape } from "./components/TelemetryTape";
 import { HttpTerminalSnapshotReader } from "./runtime/HttpTerminalSnapshotReader";
 import {
   buildTerminalEventsSocketUrl,
@@ -69,20 +68,16 @@ export const App = () => {
     applyHydratedUiState,
     isActiveAgentsSectionExpanded,
     isAgentsSidebarVisible,
-    isBottomTelemetryVisible,
     isClaudeUsageSectionExpanded,
     isCodexUsageSectionExpanded,
-    isMonitorVisible,
     isRuntimeStatusStripVisible,
     isUiStateHydrated,
     minimizedTerminalIds,
     readUiState,
     setIsActiveAgentsSectionExpanded,
     setIsAgentsSidebarVisible,
-    setIsBottomTelemetryVisible,
     setIsClaudeUsageSectionExpanded,
     setIsCodexUsageSectionExpanded,
-    setIsMonitorVisible,
     setIsRuntimeStatusStripVisible,
     setIsUiStateHydrated,
     setMinimizedTerminalIds,
@@ -319,9 +314,6 @@ export const App = () => {
   });
 
   useConsoleKeyboardShortcuts({ setActivePrimaryNav });
-  const monitorRuntime = useMonitorRuntime({
-    enabled: isUiStateHydrated && isMonitorVisible,
-  });
 
   const {
     githubCommitCount30d,
@@ -436,14 +428,13 @@ export const App = () => {
 
       <section className="console-main-canvas" aria-label="Main content canvas">
         <div
-          className={`workspace-shell${isAgentsSidebarVisible && activePrimaryNav !== 1 && activePrimaryNav !== 3 && activePrimaryNav !== 4 && activePrimaryNav !== 5 && activePrimaryNav !== 8 ? "" : " workspace-shell--full"}`}
+          className={`workspace-shell${isAgentsSidebarVisible && activePrimaryNav !== 1 && activePrimaryNav !== 3 && activePrimaryNav !== 4 && activePrimaryNav !== 7 ? "" : " workspace-shell--full"}`}
         >
           {isAgentsSidebarVisible &&
             activePrimaryNav !== 1 &&
             activePrimaryNav !== 3 &&
             activePrimaryNav !== 4 &&
-            activePrimaryNav !== 5 &&
-            activePrimaryNav !== 8 && (
+            activePrimaryNav !== 7 && (
               <ActiveAgentsSidebar
                 sidebarWidth={sidebarWidth}
                 onSidebarWidthChange={(width) => {
@@ -453,9 +444,9 @@ export const App = () => {
                 bodyContent={
                   activePrimaryNav === 2
                     ? (deckSidebarContent ?? undefined)
-                    : activePrimaryNav === 6
+                    : activePrimaryNav === 5
                       ? (conversationsSidebarContent ?? undefined)
-                      : activePrimaryNav === 7
+                      : activePrimaryNav === 6
                         ? (promptsSidebarContent ?? undefined)
                         : undefined
                 }
@@ -473,7 +464,6 @@ export const App = () => {
               onRunWorkspaceSetupStep: runWorkspaceSetupStep,
               suppressWorkspaceSetupCard: true,
             }}
-            isMonitorVisible={isMonitorVisible}
             activityPrimaryViewProps={{
               usageChartProps: {
                 data: heatmapData,
@@ -499,11 +489,8 @@ export const App = () => {
                 },
               },
             }}
-            monitorRuntime={monitorRuntime}
             settingsPrimaryViewProps={{
-              isMonitorVisible,
               isRuntimeStatusStripVisible,
-              onMonitorVisibilityChange: setIsMonitorVisible,
               onRuntimeStatusStripVisibilityChange: setIsRuntimeStatusStripVisible,
               onPreviewTerminalCompletionSound: playCompletionSoundPreview,
               onTerminalCompletionSoundChange: setTerminalCompletionSound,
@@ -564,31 +551,211 @@ export const App = () => {
                 if (!response.ok) return;
                 await refreshColumns();
               },
-              onSpawnSwarm: async (tentacleId, workspaceMode) => {
-                const response = await fetch(
-                  `/api/deck/tentacles/${encodeURIComponent(tentacleId)}/swarm`,
-                  {
+              onCreateVaultAgent: async () => {
+                // Idempotent: ensure the vaultagent tentacle exists, then spawn terminal
+                try {
+                  await fetch("/api/deck/tentacles", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ workspaceMode }),
-                  },
-                );
-                if (!response.ok) return;
-              },
-              onOctobossAction: async (action) => {
+                    body: JSON.stringify({
+                      name: "vaultagent",
+                      description: "VaultAgent — vault specialist",
+                    }),
+                  });
+                } catch {
+                  // tentacle may already exist; ignore
+                }
                 const response = await fetch("/api/terminals", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
+                    name: "VaultAgent",
                     workspaceMode: "shared",
-                    tentacleId: OCTOBOSS_ID,
-                    promptTemplate: action,
+                    tentacleId: "vaultagent",
+                    cwdScope: "vault",
+                    promptTemplate: "vault-agent-init",
                   }),
                 });
-                if (!response.ok) return undefined;
-                const snapshot = (await response.json()) as { terminalId?: string };
+                if (!response.ok) {
+                  let detail = response.statusText;
+                  try {
+                    const body = (await response.json()) as { error?: unknown };
+                    if (typeof body?.error === "string" && body.error.length > 0) {
+                      detail = body.error;
+                    }
+                  } catch {
+                    // not JSON
+                  }
+                  console.error(
+                    `[octogent] Create VaultAgent failed: ${response.status} ${detail}`,
+                  );
+                  window.alert(
+                    `Create VaultAgent failed (${response.status}):\n\n${detail}`,
+                  );
+                  return;
+                }
                 await refreshColumns();
-                return typeof snapshot.terminalId === "string" ? snapshot.terminalId : undefined;
+              },
+              onSummonSubAgent: async (
+                parentTerminalId,
+                buckets,
+                displayName,
+                purpose,
+                promptTemplate,
+                skipInitialPrompt,
+              ) => {
+                // Generate a slug from display name
+                const slug = displayName
+                  .toLowerCase()
+                  .replace(/\+/g, "-")
+                  .replace(/[^a-z0-9]+/g, "-")
+                  .replace(/^-+|-+$/g, "");
+                if (!slug) {
+                  window.alert("Invalid name — cannot derive a slug");
+                  return;
+                }
+                // Ensure tentacle exists
+                try {
+                  await fetch("/api/deck/tentacles", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      name: slug,
+                      description: `${displayName} — scope: ${buckets.join(", ")}`,
+                    }),
+                  });
+                } catch {
+                  // tentacle may already exist; ignore
+                }
+                // Build scope block descriptions from the buckets
+                // (frontend mirror of VAULT-STRUCTURE.md — minimal for prompt variables)
+                // promptTemplate defaults to vault-subagent-init but presets may override
+                // (e.g. VaultSyncAgent → vaultsync-agent-init). Variables are a superset;
+                // unknown {{placeholders}} are left as-is by the interpolator, so this is safe.
+                // Build the POST body. For general-purpose agents
+                // (skipInitialPrompt), send no promptTemplate / variables —
+                // the spawned Claude gets a vanilla boot keyed to cwd, just
+                // like opening Claude Code directly in that directory.
+                const postBody: Record<string, unknown> = {
+                  name: displayName,
+                  workspaceMode: "shared",
+                  tentacleId: slug,
+                  parentTerminalId: parentTerminalId || undefined,
+                  // Vault sub-agents spawn with cwd=vault root so they
+                  // inherit Mohamed's auto-memory + claude-mem + CLAUDE.md
+                  // chain. Without this they'd boot into octogent's empty
+                  // project slug and lose all prior context.
+                  cwdScope: "vault",
+                };
+                if (!skipInitialPrompt) {
+                  postBody.promptTemplate = promptTemplate || "vault-subagent-init";
+                  postBody.promptVariables = (() => {
+                      // Resolve the concrete memory-file set for the selected
+                      // buckets (mirrors $VAULT/.shazly/VAULT-STRUCTURE.md).
+                      // This replaces the previous hand-wave that pointed
+                      // sub-agents at the whole structure doc.
+                      const bucketObjs = getBucketsById(buckets);
+                      const memoryFiles = Array.from(
+                        new Set(
+                          bucketObjs.flatMap((b) => b.memoryFiles ?? []),
+                        ),
+                      );
+                      const memoryBlock = memoryFiles.length > 0
+                        ? memoryFiles
+                            .map(
+                              (f) =>
+                                `- ~/.claude/projects/C--Users-mohamed-elshazly-Obsidian-Vault/memory/${f}`,
+                            )
+                            .join("\n")
+                        : "(no priority memory files for selected buckets — read MEMORY.md index for overview)";
+                      const pathsBlock = bucketObjs.length > 0
+                        ? bucketObjs
+                            .flatMap((b) => b.paths.map((p) => `- ${p}`))
+                            .join("\n")
+                        : "(no paths resolved — read $VAULT/.shazly/VAULT-STRUCTURE.md)";
+                      return {
+                        displayName,
+                        bucketsList: buckets.join(", "),
+                        pathsBlock,
+                        pathsOneLine: buckets.join("+"),
+                        purposeBlock: purpose || "(no specific directive — VaultAgent will instruct you)",
+                        purposeOneLine: purpose || "(unspecified)",
+                        memoryFilesBlock: memoryBlock,
+                        memoryFilesList: memoryFiles.join(", ") || "(none)",
+                        memoryFilesCount: String(memoryFiles.length),
+                        parentTerminalId: parentTerminalId || "(none)",
+                      };
+                    })();
+                }
+                const response = await fetch("/api/terminals", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(postBody),
+                });
+                if (!response.ok) {
+                  let detail = response.statusText;
+                  try {
+                    const body = (await response.json()) as { error?: unknown };
+                    if (typeof body?.error === "string" && body.error.length > 0) {
+                      detail = body.error;
+                    }
+                  } catch {}
+                  console.error(
+                    `[octogent] Summon Sub-Agent failed: ${response.status} ${detail}`,
+                  );
+                  window.alert(`Summon Sub-Agent failed (${response.status}):\n\n${detail}`);
+                  return;
+                }
+                await refreshColumns();
+              },
+              onCreateGenericAgent: async () => {
+                const raw = window.prompt(
+                  "Agent name? (used as tentacle id + display)",
+                  "",
+                );
+                if (raw === null) return;
+                const name = raw.trim();
+                if (name.length === 0) return;
+                try {
+                  await fetch("/api/deck/tentacles", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      name,
+                      description: `Generic agent: ${name}`,
+                    }),
+                  });
+                } catch {
+                  // tentacle may already exist; ignore
+                }
+                const response = await fetch("/api/terminals", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    name,
+                    workspaceMode: "shared",
+                    tentacleId: name,
+                  }),
+                });
+                if (!response.ok) {
+                  let detail = response.statusText;
+                  try {
+                    const body = (await response.json()) as { error?: unknown };
+                    if (typeof body?.error === "string" && body.error.length > 0) {
+                      detail = body.error;
+                    }
+                  } catch {
+                    // not JSON
+                  }
+                  console.error(
+                    `[octogent] Create Agent failed: ${response.status} ${detail}`,
+                  );
+                  window.alert(
+                    `Create Agent failed (${response.status}):\n\n${detail}`,
+                  );
+                  return;
+                }
+                await refreshColumns();
               },
               onTentacleAction: async (tentacleId, action) => {
                 const response = await fetch("/api/terminals", {
@@ -609,7 +776,7 @@ export const App = () => {
                 return typeof snapshot.terminalId === "string" ? snapshot.terminalId : undefined;
               },
               onNavigateToConversation: (_sessionId) => {
-                setActivePrimaryNav(6);
+                setActivePrimaryNav(5);
               },
               onDeleteActiveSession: (terminalId, terminalName, workspaceMode) => {
                 requestDeleteTerminal(terminalId, terminalName, {
@@ -629,18 +796,15 @@ export const App = () => {
                 await refreshColumns();
               },
             }}
-            conversationsEnabled={isUiStateHydrated && activePrimaryNav === 6}
+            conversationsEnabled={isUiStateHydrated && activePrimaryNav === 5}
             onConversationsSidebarContent={setConversationsSidebarContent}
             onConversationsActionPanel={setConversationsActionPanel}
-            promptsEnabled={isUiStateHydrated && activePrimaryNav === 7}
+            promptsEnabled={isUiStateHydrated && activePrimaryNav === 6}
             onPromptsSidebarContent={setPromptsSidebarContent}
           />
         </div>
       </section>
 
-      {isUiStateHydrated && isMonitorVisible && isBottomTelemetryVisible && (
-        <TelemetryTape monitorFeed={monitorRuntime.monitorFeed} />
-      )}
     </div>
   );
 };

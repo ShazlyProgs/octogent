@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { logVerbose } from "../logging";
@@ -6,6 +6,42 @@ import { parseClaudeTranscript } from "./claudeTranscript";
 import { storeClaudeTranscriptTurns } from "./conversations";
 import { broadcastMessage } from "./protocol";
 import type { PersistedTerminal, TerminalSession } from "./types";
+
+/**
+ * Locate the CollegaOrchestration (or similarly-named) governance-hooks
+ * directory under the vault. Mohamed's pre-octogent Claude Code experience
+ * relied on these hooks (SHAZLY GATE, bash blocks, commit-time guard,
+ * validation period). Install them alongside octogent's forwarding hooks so
+ * spawned children retain that safety layer.
+ */
+const findGovernanceHooksHandler = (vaultRoot: string | undefined): string | undefined => {
+  if (!vaultRoot) {
+    return undefined;
+  }
+  const envOverride = process.env.OCTOGENT_GOVERNANCE_HOOKS;
+  if (envOverride && existsSync(envOverride)) {
+    return envOverride;
+  }
+  const agentsDir = join(vaultRoot, "VS Code Repos", "Agents");
+  if (!existsSync(agentsDir)) {
+    return undefined;
+  }
+  try {
+    const entries = readdirSync(agentsDir);
+    for (const entry of entries) {
+      if (!entry.toLowerCase().startsWith("collegaagents")) {
+        continue;
+      }
+      const candidate = join(agentsDir, entry, "scripts", "hooks", "handler.cjs");
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // Fall through
+  }
+  return undefined;
+};
 
 const MAX_AUTO_NAME_LENGTH = 50;
 
@@ -33,6 +69,7 @@ export const createHookProcessor = (deps: {
     state: TerminalSession["agentState"],
     toolName?: string,
   ) => void;
+  vaultRoot?: string | undefined;
 }) => {
   const {
     terminals,
@@ -42,7 +79,39 @@ export const createHookProcessor = (deps: {
     persistRegistry,
     deliverChannelMessages,
     onStateChange,
+    vaultRoot,
   } = deps;
+
+  const governanceHandlerPath = findGovernanceHooksHandler(vaultRoot);
+  if (governanceHandlerPath) {
+    logVerbose(`[Hook] Governance hooks will be merged from: ${governanceHandlerPath}`);
+  }
+
+  const buildGovernanceHookEntries = () => {
+    if (!governanceHandlerPath) {
+      return {} as Record<string, unknown[]>;
+    }
+    const cmd = (subcommand: string, timeout: number) => ({
+      type: "command",
+      command: `node "${governanceHandlerPath}" ${subcommand}`,
+      timeout,
+    });
+    return {
+      PreToolUse: [
+        { matcher: "Bash", hooks: [cmd("pre-bash", 2000)] },
+        { matcher: "Write|Edit|MultiEdit", hooks: [cmd("pre-write", 2000)] },
+        { matcher: "Read", hooks: [cmd("pre-read", 1000)] },
+      ],
+      PostToolUse: [
+        { matcher: "Write|Edit|MultiEdit", hooks: [cmd("post-edit", 3000)] },
+        { matcher: "Bash", hooks: [cmd("post-bash", 2000)] },
+      ],
+      UserPromptSubmit: [{ hooks: [cmd("route", 2000)] }],
+      SessionStart: [{ hooks: [cmd("session-start", 3000)] }],
+      Stop: [{ hooks: [cmd("session-sync", 3000)] }],
+      PreCompact: [{ hooks: [cmd("compact-warning", 2000)] }],
+    } as Record<string, unknown[]>;
+  };
 
   const parseSettingsObject = (fileContents: string): Record<string, unknown> | null => {
     try {
@@ -97,7 +166,7 @@ export const createHookProcessor = (deps: {
             hooks: [
               {
                 type: "command",
-                command: `curl -s -X POST "${apiBaseUrl}/api/hooks/session-start?octogent_session=$OCTOGENT_SESSION_ID" -H 'Content-Type: application/json' -d @- || true`,
+                command: `[ -n "$OCTOGENT_SESSION_ID" ] && curl -s -X POST "${apiBaseUrl}/api/hooks/session-start?octogent_session=$OCTOGENT_SESSION_ID" -H 'Content-Type: application/json' -d @- || true`,
                 timeout: 5,
               },
             ],
@@ -109,7 +178,7 @@ export const createHookProcessor = (deps: {
             hooks: [
               {
                 type: "command",
-                command: `curl -s -X POST "${apiBaseUrl}/api/hooks/user-prompt-submit?octogent_session=$OCTOGENT_SESSION_ID" -H 'Content-Type: application/json' -d @- || true`,
+                command: `[ -n "$OCTOGENT_SESSION_ID" ] && curl -s -X POST "${apiBaseUrl}/api/hooks/user-prompt-submit?octogent_session=$OCTOGENT_SESSION_ID" -H 'Content-Type: application/json' -d @- || true`,
                 timeout: 5,
               },
             ],
@@ -120,9 +189,8 @@ export const createHookProcessor = (deps: {
             matcher: "*",
             hooks: [
               {
-                type: "http",
-                url: `${apiBaseUrl}/api/hooks/pre-tool-use`,
-                headers: { "X-Octogent-Session": "$OCTOGENT_SESSION_ID" },
+                type: "command",
+                command: `[ -n "$OCTOGENT_SESSION_ID" ] && curl -s -o /dev/null -X POST "${apiBaseUrl}/api/hooks/pre-tool-use" -H 'Content-Type: application/json' -H "X-Octogent-Session: $OCTOGENT_SESSION_ID" -d @- || true`,
                 allowedEnvVars: ["OCTOGENT_SESSION_ID"],
                 timeout: 5,
               },
@@ -134,9 +202,8 @@ export const createHookProcessor = (deps: {
             matcher: "Edit|Write",
             hooks: [
               {
-                type: "http",
-                url: `${apiBaseUrl}/api/code-intel/events`,
-                headers: { "X-Octogent-Session": "$OCTOGENT_SESSION_ID" },
+                type: "command",
+                command: `[ -n "$OCTOGENT_SESSION_ID" ] && curl -s -o /dev/null -X POST "${apiBaseUrl}/api/code-intel/events" -H 'Content-Type: application/json' -H "X-Octogent-Session: $OCTOGENT_SESSION_ID" -d @- || true`,
                 allowedEnvVars: ["OCTOGENT_SESSION_ID"],
                 timeout: 5,
               },
@@ -148,9 +215,8 @@ export const createHookProcessor = (deps: {
             matcher: "*",
             hooks: [
               {
-                type: "http",
-                url: `${apiBaseUrl}/api/hooks/notification`,
-                headers: { "X-Octogent-Session": "$OCTOGENT_SESSION_ID" },
+                type: "command",
+                command: `[ -n "$OCTOGENT_SESSION_ID" ] && curl -s -o /dev/null -X POST "${apiBaseUrl}/api/hooks/notification" -H 'Content-Type: application/json' -H "X-Octogent-Session: $OCTOGENT_SESSION_ID" -d @- || true`,
                 allowedEnvVars: ["OCTOGENT_SESSION_ID"],
                 timeout: 5,
               },
@@ -163,7 +229,7 @@ export const createHookProcessor = (deps: {
             hooks: [
               {
                 type: "command",
-                command: `curl -s -X POST "${apiBaseUrl}/api/hooks/stop?octogent_session=$OCTOGENT_SESSION_ID" -H 'Content-Type: application/json' -d @- || true`,
+                command: `[ -n "$OCTOGENT_SESSION_ID" ] && curl -s -X POST "${apiBaseUrl}/api/hooks/stop?octogent_session=$OCTOGENT_SESSION_ID" -H 'Content-Type: application/json' -d @- || true`,
                 timeout: 15,
               },
             ],
@@ -188,6 +254,11 @@ export const createHookProcessor = (deps: {
           : {};
 
       for (const [eventName, eventEntries] of Object.entries(hooksConfig.hooks)) {
+        mergedHooks = mergeHookEntries(mergedHooks, eventName, eventEntries);
+      }
+
+      const governanceEntries = buildGovernanceHookEntries();
+      for (const [eventName, eventEntries] of Object.entries(governanceEntries)) {
         mergedHooks = mergeHookEntries(mergedHooks, eventName, eventEntries);
       }
 

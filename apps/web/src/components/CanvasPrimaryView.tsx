@@ -27,8 +27,10 @@ import {
   type TerminalRuntimeStateStore,
   createTerminalRuntimeStateStore,
 } from "../app/terminalRuntimeStateStore";
+import { AGENT_PRESETS } from "../app/vault-structure";
 import type { TerminalView, TerminalWorkspaceMode } from "../app/types";
 import { DeleteTentacleDialog } from "./DeleteTentacleDialog";
+import { SummonSubAgentDialog } from "./SummonSubAgentDialog";
 import { CanvasTentaclePanel } from "./canvas/CanvasTentaclePanel";
 import { CanvasTerminalColumn } from "./canvas/CanvasTerminalColumn";
 import { DeleteAllTerminalsDialog } from "./canvas/DeleteAllTerminalsDialog";
@@ -72,9 +74,17 @@ type CanvasPrimaryViewProps = {
   onCreateTerminal?: () => Promise<string | undefined> | undefined;
   onCreateWorktreeTerminal?: () => Promise<string | undefined> | undefined;
   onCreateTentacle?: () => void;
-  onSpawnSwarm?: (tentacleId: string, workspaceMode: TerminalWorkspaceMode) => Promise<void>;
   onSolveTodoItem?: (tentacleId: string, itemIndex: number) => Promise<void> | void;
-  onOctobossAction?: (action: string) => Promise<string | undefined> | undefined;
+  onCreateVaultAgent?: () => Promise<void> | void;
+  onCreateGenericAgent?: () => Promise<void> | void;
+  onSummonSubAgent?: (
+    parentTerminalId: string,
+    buckets: string[],
+    displayName: string,
+    purpose: string,
+    promptTemplate?: string,
+    skipInitialPrompt?: boolean,
+  ) => Promise<void> | void;
   onTentacleAction?: (
     tentacleId: string,
     action: string,
@@ -209,9 +219,10 @@ export const CanvasPrimaryView = ({
   onCreateTerminal,
   onCreateWorktreeTerminal,
   onCreateTentacle,
-  onSpawnSwarm,
   onSolveTodoItem,
-  onOctobossAction,
+  onCreateVaultAgent,
+  onCreateGenericAgent,
+  onSummonSubAgent,
   onTentacleAction,
   onNavigateToConversation,
   onDeleteActiveSession,
@@ -234,6 +245,7 @@ export const CanvasPrimaryView = ({
   const [openTentacles, setOpenTentacles] = useState<Map<string, GraphNode>>(new Map());
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [summonDialogForTentacle, setSummonDialogForTentacle] = useState<string | null>(null);
   const [terminalsPanelWidth, setTerminalsPanelWidth] = useState<number | null>(null);
   const [pendingOpenAgentId, setPendingOpenAgentId] = useState<string | null>(null);
   const [hideIdleTerminals, setHideIdleTerminals] = useState(false);
@@ -735,27 +747,6 @@ export const CanvasPrimaryView = ({
     [onCreateAgent],
   );
 
-  const handleSpawnSwarm = useCallback(
-    (tentacleId: string, workspaceMode: TerminalWorkspaceMode) => {
-      setContextMenu(null);
-      void onSpawnSwarm?.(tentacleId, workspaceMode);
-    },
-    [onSpawnSwarm],
-  );
-
-  const handleOctobossAction = useCallback(
-    (action: string) => {
-      setContextMenu(null);
-      const result = onOctobossAction?.(action);
-      if (result && typeof result.then === "function") {
-        void result.then((agentId) => {
-          if (agentId) setPendingOpenAgentId(agentId);
-        });
-      }
-    },
-    [onOctobossAction],
-  );
-
   const handleTentacleAction = useCallback(
     (tentacleId: string, action: string) => {
       setContextMenu(null);
@@ -1217,17 +1208,31 @@ export const CanvasPrimaryView = ({
                 sessions={sessionsByTentacleId.get(node.tentacleId) ?? []}
                 onClose={() => handleCloseTentacle(nodeId)}
                 onFocus={() => setSelectedNodeId(nodeId)}
-                onCreateAgent={(tentacleId) => {
-                  handleCreateAgent(tentacleId);
-                }}
                 onSolveTodoItem={(tentacleId, itemIndex) => {
                   void onSolveTodoItem?.(tentacleId, itemIndex);
                 }}
-                onSpawnSwarm={(tentacleId, workspaceMode) => {
-                  handleSpawnSwarm(tentacleId, workspaceMode);
-                }}
                 onNavigateToConversation={onNavigateToConversation}
                 onRefreshTentacleData={refreshDeckTentacles}
+                onSummonPreset={(hostTentacleId, presetId) => {
+                  const preset = AGENT_PRESETS.find((p) => p.id === presetId);
+                  if (!preset) return;
+                  const hostTerminalId =
+                    columns.find((t) => t.tentacleId === hostTentacleId)?.terminalId ?? "";
+                  if (!hostTerminalId) {
+                    window.alert(
+                      `${hostTentacleId} is not live. Create/summon it first.`,
+                    );
+                    return;
+                  }
+                  void onSummonSubAgent?.(
+                    hostTerminalId,
+                    preset.buckets,
+                    preset.displayName,
+                    preset.purpose,
+                    preset.promptTemplate,
+                    preset.skipInitialPrompt ?? false,
+                  );
+                }}
               />
             ))}
             {isHydratingTerminals && openTerminals.size === 0 && (
@@ -1420,26 +1425,59 @@ export const CanvasPrimaryView = ({
                   </span>
                   Update Tentacle
                 </button>
-                <button
-                  type="button"
-                  className="canvas-context-menu-item"
-                  onClick={() => handleSpawnSwarm(contextMenu.tentacleId, "worktree")}
-                >
-                  <span className="canvas-context-menu-icon">
-                    <Layers size={14} />
-                  </span>
-                  Spawn Swarm (Worktrees)
-                </button>
-                <button
-                  type="button"
-                  className="canvas-context-menu-item"
-                  onClick={() => handleSpawnSwarm(contextMenu.tentacleId, "shared")}
-                >
-                  <span className="canvas-context-menu-icon">
-                    <Layers size={14} />
-                  </span>
-                  Spawn Swarm (Normal)
-                </button>
+                {contextMenu.tentacleId === "vaultagent" && (
+                  <>
+                    {AGENT_PRESETS.map((preset) => {
+                      const vaultAgentTerminalId =
+                        columns.find((t) => t.tentacleId === "vaultagent")?.terminalId ?? "";
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className="canvas-context-menu-item"
+                          onClick={() => {
+                            setContextMenu(null);
+                            if (!vaultAgentTerminalId) {
+                              window.alert(
+                                "VaultAgent is not live. Create it first from the ShazlyBossAgent menu.",
+                              );
+                              return;
+                            }
+                            void onSummonSubAgent?.(
+                              vaultAgentTerminalId,
+                              preset.buckets,
+                              preset.displayName,
+                              preset.purpose,
+                              preset.promptTemplate,
+                              preset.skipInitialPrompt ?? false,
+                            );
+                          }}
+                          title={preset.tagline}
+                        >
+                          <span className="canvas-context-menu-icon">
+                            <Sparkles size={14} />
+                          </span>
+                          Summon {preset.displayName}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className="canvas-context-menu-item"
+                      onClick={() => {
+                        // Open the summon dialog, anchored to this VaultAgent tentacle
+                        // Resolve the VaultAgent's live terminal id at submission time
+                        setContextMenu(null);
+                        setSummonDialogForTentacle(contextMenu.tentacleId);
+                      }}
+                    >
+                      <span className="canvas-context-menu-icon">
+                        <Layers size={14} />
+                      </span>
+                      Summon Sub-Agent...
+                    </button>
+                  </>
+                )}
               </>
             )}
             {contextMenu.kind === "octoboss" && (
@@ -1447,32 +1485,28 @@ export const CanvasPrimaryView = ({
                 <button
                   type="button"
                   className="canvas-context-menu-item"
-                  onClick={() => handleOctobossAction("octoboss-reorganize-todos")}
+                  onClick={() => {
+                    setContextMenu(null);
+                    void onCreateVaultAgent?.();
+                  }}
                 >
                   <span className="canvas-context-menu-icon">
-                    <ListTodo size={14} />
+                    <Layers size={14} />
                   </span>
-                  Reorganize To-Do's
+                  Create VaultAgent
                 </button>
                 <button
                   type="button"
                   className="canvas-context-menu-item"
-                  onClick={() => handleOctobossAction("octoboss-reorganize-tentacles")}
-                >
-                  <span className="canvas-context-menu-icon">
-                    <Hexagon size={14} />
-                  </span>
-                  Reorganize Tentacles
-                </button>
-                <button
-                  type="button"
-                  className="canvas-context-menu-item"
-                  onClick={() => handleOctobossAction("octoboss-clean-contexts")}
+                  onClick={() => {
+                    setContextMenu(null);
+                    void onCreateGenericAgent?.();
+                  }}
                 >
                   <span className="canvas-context-menu-icon">
                     <Sparkles size={14} />
                   </span>
-                  Clean Tentacle Contexts
+                  Create Agent
                 </button>
               </>
             )}
@@ -1508,6 +1542,26 @@ export const CanvasPrimaryView = ({
             onConfirmDelete={onConfirmDelete}
           />
         </div>
+      )}
+
+      {summonDialogForTentacle && (
+        <SummonSubAgentDialog
+          parentTerminalId={
+            columns.find((t) => t.tentacleId === summonDialogForTentacle)?.terminalId ?? ""
+          }
+          onCancel={() => setSummonDialogForTentacle(null)}
+          onSummon={async (args) => {
+            await onSummonSubAgent?.(
+              args.parentTerminalId,
+              args.buckets,
+              args.displayName,
+              args.purpose,
+              args.promptTemplate,
+              args.skipInitialPrompt ?? false,
+            );
+            setSummonDialogForTentacle(null);
+          }}
+        />
       )}
 
       {isDeleteAllDialogOpen && (

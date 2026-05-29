@@ -115,6 +115,7 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       initialInputDraft?: string;
       autoRenamePromptContext?: string;
       parentTerminalId?: string;
+      cwdScope?: "vault";
     } = {
       workspaceMode: workspaceModeResult.workspaceMode,
     };
@@ -148,6 +149,9 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       bodyPayload.parentTerminalId.trim().length > 0
     ) {
       createTerminalInput.parentTerminalId = bodyPayload.parentTerminalId.trim();
+    }
+    if (bodyPayload && bodyPayload.cwdScope === "vault") {
+      createTerminalInput.cwdScope = "vault";
     }
     if (
       bodyPayload &&
@@ -183,10 +187,14 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
           : {};
 
       // Auto-inject terminalId variable so callers don't have to guess it.
-      // The runtime hasn't allocated the ID yet, so we use the tentacle name
-      // when provided (sandbox always passes its name).
-      if (!templateVars.terminalId && createTerminalInput.tentacleName) {
-        templateVars.terminalId = createTerminalInput.tentacleName;
+      // Pre-allocate the real terminal id up-front so {{terminalId}} resolves
+      // to (e.g.) "terminal-5" instead of the tentacle name — prompts that
+      // call channel APIs or reference the id directly need the runtime id.
+      if (!templateVars.terminalId) {
+        if (!createTerminalInput.terminalId) {
+          createTerminalInput.terminalId = runtime.allocateTerminalId();
+        }
+        templateVars.terminalId = createTerminalInput.terminalId;
       }
 
       // Auto-inject apiPort so prompt templates can reference the local API.

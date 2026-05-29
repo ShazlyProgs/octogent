@@ -37,8 +37,11 @@ export const sendMessage = (client: WebSocket, message: TerminalServerMessage) =
 };
 
 export const broadcastMessage = (session: TerminalSession, message: TerminalServerMessage) => {
+  const serialized = session.clients.size > 0 ? JSON.stringify(message) : "";
   for (const client of session.clients) {
-    sendMessage(client, message);
+    if (client.readyState === 1) {
+      client.send(serialized);
+    }
   }
   for (const listener of session.directListeners) {
     listener(message);

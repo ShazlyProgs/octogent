@@ -10,5 +10,8 @@
 **/dist/
 **/.vite/
 **/coverage/
+# Migration-artifact duplicates — Windows copy-paste " (1)" suffix dodges the patterns above
+node_modules*/
+**/node_modules*/
 
 .octogent

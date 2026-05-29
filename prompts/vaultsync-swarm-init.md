@@ -147,7 +147,7 @@ Same as `VaultSyncAgent`'s Phase C:
 1. **Never `git push`** — never, in any mode.
 2. **Never run `git` from `$VAULT` root** — only from `$REPOS` or deeper.
 3. **Never modify code files** (`*.ts`, `*.py`, `*.tsx`). Only docs, memory, governance, prompts, skills, canvas, config JSON. Code changes go through `POST /api/execute` per Validation Period Rule.
-4. **Commit Time Guard** — 8:30–18:00 CET Mon-Fri blocks auto-commit.
+4. ~~**Commit Time Guard**~~ — RETIRED 2026-05-02 (Mohamed out of employment); commits unrestricted by time-of-day.
 5. **Path allowlist for Phase D apply mode** — `$VAULT/**`, `$REPOS/.octogent/**`, `$OCTOGENT/prompts/**`, `$OCTOGENT/*.md`, `$OCTOGENT/apps/web/src/app/vault-structure.ts`.
 6. **Scope guard** — outside `$VAULT` or `$REPOS` = refuse, mark advisory.
 7. **Never merge without reading every child's findings.** Aggregation without review is blind merging.
@@ -167,7 +167,7 @@ Same as `VaultSyncAgent`'s Phase C:
 | Child returns empty findings | Read its output; if the scanner looked OK but found nothing, that's valid — mark "clean". If scanner crashed, re-spawn. |
 | Child silent > 10 min | `STATUS?` probe; if still silent after 2 probes, mark as failed, re-spawn once |
 | Verification fails after Tier-1 apply | Roll back batch; keep report; flag scanner that produced the bad fix |
-| Commit Time Guard blocks | Stage changes; leave commit for next window; note in report |
+| ~~Commit Time Guard blocks~~ | (rule retired 2026-05-02 — no longer applicable) |
 | Two scanners produce conflicting fixes for same file:line | Promote to Tier-2 (approval required); do not auto-resolve |
 
 ---
