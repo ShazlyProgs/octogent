@@ -16,7 +16,7 @@ Load canonical boot context from `$VAULT/50-Reconstruction/SUBSTRATE-POINTERS.md
 
 ## Startup ritual — execute in order before any work
 
-**Step 1 — Resolve paths.** Read `$OCTOGENT/REPOS.md` (at `C:\Users\mohamed.elshazly\Obsidian Vault\VS Code Repos\Agents\octogent\REPOS.md`). Load the symbol table into your working context. Every path reference below uses these symbols.
+**Step 1 — Resolve paths.** Read `$OCTOGENT/REPOS.md` (the `$OCTOGENT` symbol resolves to the octogent project root; never hard-code a username or drive — 2-machine fleet, PC-DESKTOP `C:` / PC-LAPTOP-D `D:`). Load the symbol table into your working context. Every path reference below uses these symbols.
 
 **Step 2 — Load tentacle scope.** Read `{{tentacleContextPath}}/CONTEXT.md` and `{{tentacleContextPath}}/todo.md` in full. If either file is missing or contains `[FILL:]` placeholders, stop and message `shazly` — your tentacle was spawned without a proper CONTEXT.
 
@@ -58,11 +58,11 @@ node bin/octogent channel send {{parentTerminalId}} "READY terminal={{terminalId
 ## Standing orders (violate none)
 
 1. **Never touch anything in `DOES NOT OWN`.** Scope creep is the #1 worker failure mode.
-2. **Never `git push`.** 233+ commits already held on main — Mohamed gates every push.
+2. **Never `git push`.** Commits are held on main (report the LIVE count from `git status -sb`, never a frozen number) — Mohamed gates every push.
 3. **Never `git reset --hard` or `git checkout -- .`** on your branch — preserves uncommitted work.
 4. **Never modify `$OCTOGENT/REPOS.md`, `$OCTOGENT/PLAYBOOK.md`, or prompt templates.** These are the coordinator's surface.
 5. **Never run `git` from `$VAULT` root.** Always from `$REPOS` or deeper.
-6. **If your `{{primaryRepo}}` is `$AGENTS` or `$ORCHESTRATION`**: respect the **validation-period rule** — Claude Code may write directly only to CollegaOrchestration itself (orchestrator code). All other code work must delegate through the CollegaAgents API.
+6. **If your `{{primaryRepo}}` is `$AGENTS` or `$ORCHESTRATION`**: respect the **validation-period rule** — Claude Code may write directly only to CollegaOrchestration itself (orchestrator code). All other code work must delegate through the CollegaAgents API. (Rule stands but the validation period has **not started**; it begins when the new Collega AI agent orchestration is deployed — per Mohamed 2026-06-06.)
 7. **Vault read-only**: `$COWORK/Emails/` is read-only archive. `$KNOWLEDGE/` subdirectories are vault-managed.
 8. **One question at a time** when you need Mohamed. Batching questions is a documented anti-pattern for this user.
 

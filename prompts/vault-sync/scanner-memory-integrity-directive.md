@@ -9,7 +9,7 @@ Read `_scanner-base.md` first.
 - `$MEMORY/` directory
 - `$MEMORY/MEMORY.md` (index file)
 
-Resolve `$MEMORY` via REPOS.md (= `C:/Users/mohamed.elshazly/.claude/projects/C--Users-mohamed-elshazly-Obsidian-Vault/memory/`).
+Resolve `$MEMORY` via REPOS.md (= this machine's `~/.claude/projects/<vault-slug>/memory/`; the slug differs per machine — `C--Users-shazl-Obsidian-Vault` on PC-DESKTOP, `D--Obsidian-Vault` on PC-LAPTOP-D. Never hard-code a username or drive).
 
 ## Ground truth
 Filesystem vs. MEMORY.md index. Two-way integrity:

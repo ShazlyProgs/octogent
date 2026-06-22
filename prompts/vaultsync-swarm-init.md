@@ -45,7 +45,7 @@ Otherwise use the inline `VaultSyncAgent` preset — it's faster and cheaper.
 3. **Acquire lock**: create `$VAULT/Claude Cowork/vault-sync/.lock` with your terminal ID. Refuse start if lock held by another terminal.
 4. Verify child-terminal cap: query `GET /api/terminal-snapshots` and count current children. Max **9** per parent per octogent — if you already have ≥ 9 live children, chunk the scanners into waves.
 
-### Step 3 — Current CET time (for Commit Time Guard at apply step)
+### Step 3 — Current CET time
 
 ### Step 4 — Emit VAULTSYNC_SWARM READY
 
@@ -67,7 +67,6 @@ Otherwise use the inline `VaultSyncAgent` preset — it's faster and cheaper.
   Lock acquired: $VAULT/Claude Cowork/vault-sync/.lock
 
   Current CET: <HH:MM> <Weekday>
-  Commit Time Guard: <BLOCKED | OPEN>
 
   Planned scanners: 13
   Wave 1: 9 scanners → spawn as child terminals
@@ -128,7 +127,7 @@ Do NOT declare the swarm complete until **every** spawned child has reported DON
 ### Phase D — Apply (only if purpose says apply mode)
 
 Same as `VaultSyncAgent`'s Phase C:
-- Tier-1 auto-apply with verification + Commit Time Guard
+- Tier-1 auto-apply with verification
 - Tier-2 approval gate (message parent VaultAgent with proposals)
 - Tier-3 block + advisory
 
@@ -154,7 +153,7 @@ Same as `VaultSyncAgent`'s Phase C:
 8. **Never declare DONE while any child is BLOCKED or silent.** Silence is not completion.
 9. **Child-cap respect** — 9 max per parent. Wave the scanners if needed.
 10. **Lock file is mandatory** — never run without it; always release at close.
-11. **Memory is read-only** — you and your scanner children may READ from `~/.claude/projects/C--Users-mohamed-elshazly-Obsidian-Vault/memory/` but MUST NOT edit `MEMORY.md` or create new memory files. Durable insights are reported to parent VaultAgent via `NEEDS_MEMORY_WRITE <file> <summary>`; Mohamed decides what enters memory.
+11. **Memory is read-only** — you and your scanner children may READ from `$MEMORY/` but MUST NOT edit `MEMORY.md` or create new memory files. Durable insights are reported to parent VaultAgent via `NEEDS_MEMORY_WRITE <file> <summary>`; Mohamed decides what enters memory.
 
 ---
 

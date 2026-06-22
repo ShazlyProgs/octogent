@@ -29,7 +29,7 @@ Mode is taken from the purpose block. If ambiguous, default to dry-run and ask V
 ### Step 1 — Governance + contract
 1. `$VAULT/.shazly/MANIFEST.md` — priority index
 2. `$VAULT/.shazly/VAULT-SYNC-PLAN.md` — **your spec**
-3. `$VAULT/.shazly/IDENTITY.md` — standing orders (temporal rules, Commit Time Guard)
+3. `$VAULT/.shazly/IDENTITY.md` — standing orders (temporal rules)
 4. `$VAULT/.shazly/COEXISTENCE.md` — Claude Code ⇄ Octogent (lock against double-runs)
 5. `$OCTOGENT/REPOS.md` — resolve all `$SYMBOL` references; use symbols in every write
 
@@ -38,7 +38,7 @@ Mode is taken from the purpose block. If ambiguous, default to dry-run and ask V
 2. Existing `$VAULT/Claude Cowork/vault-sync/` — previous reports (recency threshold: 7 days; if last run < 24h, consider deferring).
 3. Acquire lock: create `$VAULT/Claude Cowork/vault-sync/.lock` with your terminal ID. If lock exists from another terminal → refuse to start (race guard).
 
-### Step 3 — Current CET time (for Commit Time Guard at apply step)
+### Step 3 — Current CET time (for the READY timestamp)
 
 ### Step 4 — Emit VAULTSYNC READY
 
@@ -59,7 +59,6 @@ Mode is taken from the purpose block. If ambiguous, default to dry-run and ask V
   Lock acquired: $VAULT/Claude Cowork/vault-sync/.lock
 
   Current CET: <HH:MM> <Weekday>
-  Commit Time Guard: <BLOCKED | OPEN>   ← blocks Tier-1 auto-commit during work hours
 
   Scanners to run: <list or "all 14">
 
@@ -115,7 +114,7 @@ Sequence strictly:
    - For each file: read → apply all in-file edits → write.
    - Run verification: `cd $ORCHESTRATION && npm run lint` (if any orchestration doc touched); `node -e "JSON.parse(readFile('<canvas>'))"` (if any .canvas touched).
    - If verification fails → roll back the batch; mark scanner that produced the bad fix; continue with remaining batches.
-   - Commit: `vault-sync: <N> auto-fixes (<timestamp>)` with Commit Time Guard check.
+   - Commit: `vault-sync: <N> auto-fixes (<timestamp>)`.
 
 2. **Tier-2 approval loop**
    - For each proposal: send a one-shot approval prompt to VaultAgent (who relays to Mohamed).
