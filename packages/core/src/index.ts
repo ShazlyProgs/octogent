@@ -3,6 +3,7 @@ export * from "./application/fleetPlan";
 export * from "./application/backOfficeTools";
 export * from "./application/chatParity";
 export * from "./application/createConversation";
+export * from "./application/renameConversation";
 export * from "./application/sendMessage";
 export * from "./application/verifyHarness";
 export * from "./adapters/InMemoryTerminalSnapshotReader";

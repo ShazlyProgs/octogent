@@ -23,7 +23,7 @@ Three dispositions. **native** = octogent already serves it (its existing read/l
 | Get conversation + messages | `GET /:id` | native | `GET /api/conversations/:id` |
 | Delete conversation | `DELETE /:id` | native | `DELETE /api/conversations/:id` (+ clear-all) |
 | Start a conversation | `POST /` | adapter ✓ **PROVEN** | **built Phase 3 m3** — create a chat session bound to a tentacle terminal ([D8]) via `createTerminal`; `POST /api/conversations` → `runtime.createConversation` over the pure `createConversation.ts` contract |
-| Rename / update metadata | `PUT /:id` | adapter | session-metadata rename over the transcript store (no LLM) |
+| Rename / update metadata | `PUT /:id` | adapter ✓ **PROVEN** | **built Phase 3 m4** — session-metadata rename over the transcript store (no LLM); title persisted in a `.meta.json` sidecar + surfaced on the summary; `PUT /api/conversations/:id` → `runtime.renameConversation` |
 | **Send a message (the chat turn)** | `POST /:id/messages` | adapter ✓ **PROVEN** | **KEYSTONE (built Phase 3 m2)** — submit input to the tentacle session + surface the transcript reply, with the per-conversation processing lock. Now: `POST /api/conversations/:id/messages` → `runtime.submitConversationMessage` over the pure `sendMessage.ts` contract |
 | Generate a title | `POST /:id/generate-title` · `/:id/auto-title` | adapter | derive from `ConversationSessionSummary.firstUserTurnPreview` |
 | Summarize | `POST /:id/summarize` | adapter | octogent-native session summary over `ConversationSessionSummary` |
@@ -32,7 +32,7 @@ Three dispositions. **native** = octogent already serves it (its existing read/l
 | Suggested replies | `POST /:id/suggestions` | drop | engine-coupled reply nicety; retire with the engine |
 | Search documents from chat | `GET /documents/search` | drop | KB/RAG — served by the back-office KB tool seam (`BACKOFFICE-TOOLS.md` follow-up), not the chat surface |
 
-Current tally: **3 native · 6 adapter · 3 drop** — of the 6 adapters, **2 proven** (send-message m2, create-conversation m3), 4 pending.
+Current tally: **3 native · 6 adapter · 3 drop** — of the 6 adapters, **3 proven** (send-message m2, create-conversation m3, rename-conversation m4), 3 pending.
 
 ## The retire gate (D9 "no hard cut", machine-checkable)
 
@@ -53,6 +53,6 @@ The chat turn is now octogent-native and proven:
 
 ## Cut-line (remaining Phase 3 work — deliberately not yet)
 
-- **4 adapters still pending**: rename / title / summary / attach. Each lands next, flipping its registry row + adding its own tests.
+- **3 adapters still pending**: title / summary / attach. Each lands next, flipping its registry row + adding its own tests.
 - **No `:3001` change.** The dashboard Chat stays live and untouched; its retirement is Phase 4 (engine excision) and is **gated on `retireReady === true`**, not on a date.
 - **Drops are not re-implemented.** `delegate` / `suggestions` / `documents-search` retire with the engine; they are excluded from the gate by design.

@@ -73,6 +73,65 @@ export type { ConversationTurn };
 export const transcriptFilenameForSession = (sessionId: string) =>
   `${encodeURIComponent(sessionId)}.jsonl`;
 
+// #45 Phase 3 [D9] conversation-metadata sidecar. Holds the octogent-native conversation title
+// (rename-conversation / generate-title adapters) + summary (conversation-summary adapter) next to
+// the transcript — the "session-metadata over the transcript store" the D9 parity calls for. No LLM.
+export type ConversationMeta = {
+  title?: string;
+  summary?: string;
+};
+
+const conversationMetaFilename = (sessionId: string) =>
+  `${encodeURIComponent(sessionId)}.meta.json`;
+
+export const readConversationMeta = (
+  transcriptDirectoryPath: string,
+  sessionId: string,
+): ConversationMeta | null => {
+  const metaPath = join(transcriptDirectoryPath, conversationMetaFilename(sessionId));
+  if (!existsSync(metaPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(metaPath, "utf8")) as unknown;
+    if (!isRecord(parsed)) {
+      return null;
+    }
+
+    const meta: ConversationMeta = {};
+    const title = asString(parsed.title);
+    if (title !== null) {
+      meta.title = title;
+    }
+    const summary = asString(parsed.summary);
+    if (summary !== null) {
+      meta.summary = summary;
+    }
+    return meta;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Merge a metadata patch into the conversation's sidecar (create if absent). Append-only over the
+ * transcript store — never touches the transcript itself. Used by the rename / title / summary
+ * adapters.
+ */
+export const writeConversationMeta = (
+  transcriptDirectoryPath: string,
+  sessionId: string,
+  patch: ConversationMeta,
+): ConversationMeta => {
+  ensureTranscriptDirectory(transcriptDirectoryPath);
+  const existing = readConversationMeta(transcriptDirectoryPath, sessionId) ?? {};
+  const next: ConversationMeta = { ...existing, ...patch };
+  const metaPath = join(transcriptDirectoryPath, conversationMetaFilename(sessionId));
+  writeFileSync(metaPath, JSON.stringify(next), "utf8");
+  return next;
+};
+
 const parseTranscriptEvent = (value: unknown): ConversationTranscriptEvent | null => {
   if (!isRecord(value)) {
     return null;
@@ -189,6 +248,8 @@ const buildConversationSummary = (
   return {
     sessionId,
     tentacleId: firstEvent?.tentacleId ?? null,
+    // Placeholder — resolved from the metadata sidecar by readConversationSession (#45 Phase 3 D9).
+    title: null,
     startedAt: firstEvent?.timestamp ?? null,
     endedAt: lastSessionEnd?.timestamp ?? null,
     lastEventAt: lastEvent?.timestamp ?? null,
@@ -285,8 +346,14 @@ export const readConversationSession = (
   const turns = readClaudeTranscriptTurns(transcriptDirectoryPath, sessionId) ?? [];
   const summary = buildConversationSummary(sessionId, events, turns);
 
+  // #45 Phase 3 [D9] title resolution: an explicitly stored title (rename / generate-title) wins,
+  // otherwise null here — the auto-derive-from-first-turn fold lands with the conversation-title
+  // adapter (Phase 3 m5). Read from the metadata sidecar over the transcript store.
+  const meta = readConversationMeta(transcriptDirectoryPath, sessionId);
+
   return {
     ...summary,
+    title: meta?.title ?? null,
     firstUserTurnPreview: truncatePreview(summary.firstUserTurnPreview),
     lastUserTurnPreview: truncatePreview(summary.lastUserTurnPreview),
     lastAssistantTurnPreview: truncatePreview(summary.lastAssistantTurnPreview),
@@ -318,6 +385,7 @@ export const listConversationSessions = (
       return {
         sessionId: detail.sessionId,
         tentacleId: detail.tentacleId,
+        title: detail.title,
         startedAt: detail.startedAt,
         endedAt: detail.endedAt,
         lastEventAt: detail.lastEventAt,
@@ -355,21 +423,16 @@ export const deleteConversation = (transcriptDirectoryPath: string, sessionId: s
     transcriptDirectoryPath,
     `${encodeURIComponent(sessionId)}.claude-turns.json`,
   );
+  const metaFile = join(transcriptDirectoryPath, conversationMetaFilename(sessionId));
 
-  try {
-    if (existsSync(transcriptFile)) {
-      rmSync(transcriptFile);
+  for (const file of [transcriptFile, turnsFile, metaFile]) {
+    try {
+      if (existsSync(file)) {
+        rmSync(file);
+      }
+    } catch {
+      // Best-effort removal
     }
-  } catch {
-    // Best-effort removal
-  }
-
-  try {
-    if (existsSync(turnsFile)) {
-      rmSync(turnsFile);
-    }
-  } catch {
-    // Best-effort removal
   }
 };
 
@@ -380,7 +443,11 @@ export const deleteAllConversations = (transcriptDirectoryPath: string) => {
 
   const files = readdirSync(transcriptDirectoryPath);
   for (const file of files) {
-    if (file.endsWith(".jsonl") || file.endsWith(".claude-turns.json")) {
+    if (
+      file.endsWith(".jsonl") ||
+      file.endsWith(".claude-turns.json") ||
+      file.endsWith(".meta.json")
+    ) {
       try {
         rmSync(join(transcriptDirectoryPath, file));
       } catch {

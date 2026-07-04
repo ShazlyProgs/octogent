@@ -4,9 +4,11 @@ import type { Duplex } from "node:stream";
 
 import type { TerminalSnapshot } from "@octogent/core";
 import {
+  ConversationRenameError,
   CreateConversationError,
   SendMessageError,
   buildConversationInputSubmit,
+  buildConversationRename,
   buildCreateConversationRequest,
   resolveSendMessageDisposition,
 } from "@octogent/core";
@@ -26,6 +28,7 @@ import {
   listConversationSessions,
   readConversationSession,
   searchConversations,
+  writeConversationMeta,
 } from "./terminalRuntime/conversations";
 import { createGitOperations } from "./terminalRuntime/gitOperations";
 import { createHookProcessor } from "./terminalRuntime/hookProcessor";
@@ -86,6 +89,16 @@ export type CreateConversationResult =
       workspaceMode: TentacleWorkspaceMode;
     }
   | { status: "invalid"; error: string };
+
+/**
+ * Result of renaming a conversation (#45 Phase 3 [D9] rename-conversation adapter). Discriminated
+ * so the HTTP route maps each case to the legacy-parity status code: renamed → 200, invalid → 400,
+ * no-conversation → 404.
+ */
+export type RenameConversationResult =
+  | { status: "renamed"; sessionId: string; title: string }
+  | { status: "invalid"; error: string }
+  | { status: "no-conversation" };
 
 export const createTerminalRuntime = ({
   workspaceCwd,
@@ -496,6 +509,33 @@ export const createTerminalRuntime = ({
         }
         throw error;
       }
+    },
+
+    // #45 Phase 3 [D9] chat rename-conversation adapter. The octogent-native form of the legacy
+    // dashboard Chat's `PUT /:id` metadata update: a session-metadata rename over the transcript
+    // store (NO LLM). Validates the title via the pure buildConversationRename contract, checks the
+    // conversation exists (a live terminal record OR an on-disk transcript), then persists the
+    // title in the metadata sidecar — surfaced by the native GET /api/conversations/:id read.
+    renameConversation(sessionId: string, title: unknown): RenameConversationResult {
+      let normalized: ReturnType<typeof buildConversationRename>;
+      try {
+        normalized = buildConversationRename(title);
+      } catch (error) {
+        if (error instanceof ConversationRenameError) {
+          return { status: "invalid", error: error.message };
+        }
+        throw error;
+      }
+
+      const exists =
+        terminals.has(sessionId) ||
+        readConversationSession(transcriptDirectoryPath, sessionId) !== null;
+      if (!exists) {
+        return { status: "no-conversation" };
+      }
+
+      writeConversationMeta(transcriptDirectoryPath, sessionId, { title: normalized.title });
+      return { status: "renamed", sessionId, title: normalized.title };
     },
 
     // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's

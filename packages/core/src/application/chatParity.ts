@@ -119,8 +119,12 @@ const CHAT_PARITY: ChatParityCapability[] = [
     legacyRoute: "PUT /:id",
     disposition: "adapter",
     octogentParity:
-      "Session-metadata rename over the transcript store (no LLM); adapter in apps/api.",
-    parityProven: false,
+      "Session-metadata rename over the transcript store (no LLM); title persisted in a metadata sidecar + surfaced on the conversation summary.",
+    // PROVEN — Phase 3 milestone 4 (MASTER-LIST r92): rename-conversation adapter is live. Pure
+    // contract in application/renameConversation.ts (title validation → legacy 400); wired as
+    // runtime.renameConversation (writes the .meta.json sidecar); route PUT /api/conversations/:id
+    // → 200 / 400 / 404; the stored title is surfaced by the native GET read.
+    parityProven: true,
   },
   {
     id: "send-message",

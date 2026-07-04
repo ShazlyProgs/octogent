@@ -575,6 +575,7 @@ describe("createApiServer", () => {
       {
         sessionId: "terminal-1",
         tentacleId: "terminal-1",
+        title: null,
         startedAt: "2026-03-05T10:00:00.000Z",
         endedAt: "2026-03-05T10:00:04.000Z",
         lastEventAt: "2026-03-05T10:00:04.000Z",

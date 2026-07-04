@@ -171,6 +171,31 @@ export const handleConversationItemRoute: ApiRouteHandler = async (
     return true;
   }
 
+  // #45 Phase 3 [D9] — rename-conversation adapter. Parity with the legacy dashboard Chat's
+  // PUT /:id metadata update: persist a session title over the transcript store (no LLM).
+  if (request.method === "PUT") {
+    const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+    if (!bodyReadResult.ok) {
+      return true;
+    }
+
+    const body = bodyReadResult.payload as Record<string, unknown> | null;
+    const result = runtime.renameConversation(sessionId, body ? body.title : undefined);
+
+    if (result.status === "invalid") {
+      writeJson(response, 400, { error: result.error }, corsOrigin);
+      return true;
+    }
+
+    if (result.status === "no-conversation") {
+      writeJson(response, 404, { error: "Conversation session not found." }, corsOrigin);
+      return true;
+    }
+
+    writeJson(response, 200, { sessionId: result.sessionId, title: result.title }, corsOrigin);
+    return true;
+  }
+
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
     return true;
