@@ -1,13 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AUDIT_VERDICTS,
   VERIFY_VERDICT_JSON_SCHEMA,
   VerifyHarnessError,
+  type VerifyVerdict,
   type WorkProductDescriptor,
   buildVerifyPrompt,
+  evaluateVerifyGate,
   isAuditVerdict,
   parseVerifyVerdict,
+  runAutoVerify,
 } from "../src/application/verifyHarness";
 
 const DESCRIPTOR: WorkProductDescriptor = {
@@ -124,5 +127,92 @@ describe("parseVerifyVerdict", () => {
         notes: "",
       }),
     ).toThrow(/APPROVE cannot carry mustFix/);
+  });
+});
+
+// --- D4 auto-run (gate + injectable orchestrator) --------------------------
+
+const verdictOf = (verdict: VerifyVerdict["verdict"], mustFix: string[] = []): VerifyVerdict => ({
+  verdict,
+  mustFix,
+  notes: "",
+});
+
+describe("evaluateVerifyGate", () => {
+  it("blocks on REJECT and carries the mustFix list in the reason", () => {
+    const d = evaluateVerifyGate(verdictOf("REJECT", ["path is stale", "test never ran"]));
+    expect(d.blocked).toBe(true);
+    expect(d.verdict).toBe("REJECT");
+    expect(d.reason).toContain("REJECTED");
+    expect(d.reason).toContain("path is stale");
+    expect(d.reason).toContain("test never ran");
+  });
+
+  it("passes on APPROVE", () => {
+    const d = evaluateVerifyGate(verdictOf("APPROVE"));
+    expect(d.blocked).toBe(false);
+    expect(d.reason).toContain("APPROVED");
+  });
+
+  it("passes APPROVE_WITH_FIXES by default but blocks when blockOnFixes is set", () => {
+    const pass = evaluateVerifyGate(verdictOf("APPROVE_WITH_FIXES", ["tighten reason"]));
+    expect(pass.blocked).toBe(false);
+    expect(pass.reason).toContain("follow-up");
+
+    const block = evaluateVerifyGate(verdictOf("APPROVE_WITH_FIXES", ["tighten reason"]), {
+      blockOnFixes: true,
+    });
+    expect(block.blocked).toBe(true);
+    expect(block.reason).toContain("blockOnFixes");
+    expect(block.reason).toContain("tighten reason");
+  });
+});
+
+describe("runAutoVerify", () => {
+  const descriptor: WorkProductDescriptor = {
+    title: "fleet spawn",
+    claim: "stood up 2 tentacles parent-before-child",
+  };
+
+  it("returns pending with the prompt when no producer is supplied (never fabricates)", async () => {
+    const result = await runAutoVerify(descriptor);
+    expect(result.status).toBe("pending");
+    expect(result.verdict).toBeNull();
+    expect(result.decision).toBeNull();
+    expect(result.prompt).toContain("ADVERSARIAL VERIFIER");
+  });
+
+  it("feeds the built prompt to the producer and passes on APPROVE", async () => {
+    const produceVerdict = vi.fn(async () => ({ verdict: "APPROVE", mustFix: [], notes: "ok" }));
+    const result = await runAutoVerify(descriptor, { produceVerdict });
+    expect(produceVerdict).toHaveBeenCalledTimes(1);
+    expect(produceVerdict.mock.calls[0]?.[0]).toContain("REFUTE the claim");
+    expect(result.status).toBe("passed");
+    expect(result.verdict?.verdict).toBe("APPROVE");
+    expect(result.decision?.blocked).toBe(false);
+  });
+
+  it("blocks when the producer returns REJECT", async () => {
+    const result = await runAutoVerify(descriptor, {
+      produceVerdict: () => ({ verdict: "REJECT", mustFix: ["orphaned child"], notes: "" }),
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.decision?.blocked).toBe(true);
+    expect(result.decision?.reason).toContain("orphaned child");
+  });
+
+  it("accepts a JSON-string verdict from the producer", async () => {
+    const result = await runAutoVerify(descriptor, {
+      produceVerdict: () => '{"verdict":"APPROVE","mustFix":[],"notes":""}',
+    });
+    expect(result.status).toBe("passed");
+  });
+
+  it("propagates a malformed verdict as a VerifyHarnessError", async () => {
+    await expect(
+      runAutoVerify(descriptor, {
+        produceVerdict: () => ({ verdict: "LGTM", mustFix: [], notes: "" }),
+      }),
+    ).rejects.toThrow(VerifyHarnessError);
   });
 });

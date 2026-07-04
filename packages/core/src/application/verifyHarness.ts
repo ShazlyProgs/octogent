@@ -171,3 +171,106 @@ export function parseVerifyVerdict(raw: unknown): VerifyVerdict {
   const notes = typeof rec.notes === "string" ? rec.notes : "";
   return { verdict: rec.verdict, mustFix: rec.mustFix as string[], notes };
 }
+
+// ---------------------------------------------------------------------------
+// D4 AUTO-RUN (#45 Phase 2) — the gate + the injectable auto-verify orchestrator.
+//
+// The harness above EMITS the refute-by-default prompt and VALIDATES the verdict;
+// this layer closes the loop so the fleet can audit a work product AUTOMATICALLY and
+// GATE on the result (block on REJECT). It stays pure + dependency-light: the verdict
+// PRODUCER (the LLM/agent that actually runs the emitted prompt) is INJECTED, so core
+// carries no model dependency and the gate is deterministically testable. This is the
+// step the VERIFY-HARNESS.md cut-line called "next" — separable from the LATER A5
+// autonomous eval loop ([D7]): it is a deterministic per-work-product gate, not a
+// self-driving loop. The fleet-spawn wiring lives in apps/api (ports-and-adapters).
+// ---------------------------------------------------------------------------
+
+export interface VerifyGateOptions {
+  /** Block on APPROVE_WITH_FIXES too. Default false — only REJECT blocks the gate. */
+  blockOnFixes?: boolean;
+}
+
+export interface VerifyGateDecision {
+  verdict: AuditVerdict;
+  /** true ⇒ the work product must NOT proceed (adversarial-verify refused it). */
+  blocked: boolean;
+  /** Human-readable reason (carries the mustFix list when blocked). */
+  reason: string;
+}
+
+/**
+ * Deterministic gate over a validated verdict. REJECT always blocks; APPROVE never
+ * blocks; APPROVE_WITH_FIXES blocks only when blockOnFixes is set (otherwise it passes
+ * with the fixes carried as follow-ups). Pure — no I/O, no model.
+ */
+export function evaluateVerifyGate(
+  verdict: VerifyVerdict,
+  options: VerifyGateOptions = {},
+): VerifyGateDecision {
+  const fixes = verdict.mustFix.length > 0 ? `: ${verdict.mustFix.join("; ")}` : "";
+  if (verdict.verdict === "REJECT") {
+    return {
+      verdict: verdict.verdict,
+      blocked: true,
+      reason: `adversarial-verify REJECTED${fixes}`,
+    };
+  }
+  if (verdict.verdict === "APPROVE_WITH_FIXES" && options.blockOnFixes) {
+    return {
+      verdict: verdict.verdict,
+      blocked: true,
+      reason: `adversarial-verify APPROVED_WITH_FIXES and blockOnFixes is set${fixes}`,
+    };
+  }
+  return {
+    verdict: verdict.verdict,
+    blocked: false,
+    reason:
+      verdict.verdict === "APPROVE"
+        ? "adversarial-verify APPROVED"
+        : `adversarial-verify APPROVED_WITH_FIXES (${verdict.mustFix.length} follow-up fix(es))`,
+  };
+}
+
+/** Runs an emitted audit prompt and returns the raw verdict (an LLM/agent adapter). */
+export type VerdictProducer = (prompt: string) => Promise<unknown> | unknown;
+
+export type AutoVerifyStatus = "passed" | "blocked" | "pending";
+
+export interface AutoVerifyResult {
+  status: AutoVerifyStatus;
+  /** The emitted refute-by-default audit prompt (always present). */
+  prompt: string;
+  /** The parsed verdict, or null when no producer was supplied (status "pending"). */
+  verdict: VerifyVerdict | null;
+  /** The gate decision, or null when pending. */
+  decision: VerifyGateDecision | null;
+}
+
+export interface RunAutoVerifyOptions {
+  /** Runs the emitted prompt and returns the raw verdict. Omit ⇒ status "pending". */
+  produceVerdict?: VerdictProducer;
+  /** Gate tuning (blockOnFixes). */
+  gate?: VerifyGateOptions;
+}
+
+/**
+ * Close the adversarial-verify loop automatically: build the refute-by-default prompt,
+ * run it via the injected producer, validate the verdict, and apply the gate. With NO
+ * producer it returns status "pending" carrying the prompt — HONEST: it never fabricates
+ * a verdict, an operator/agent must run the emitted prompt. Throws VerifyHarnessError on
+ * an unbuildable descriptor or a malformed verdict.
+ */
+export async function runAutoVerify(
+  descriptor: WorkProductDescriptor,
+  options: RunAutoVerifyOptions = {},
+): Promise<AutoVerifyResult> {
+  const prompt = buildVerifyPrompt(descriptor);
+  if (!options.produceVerdict) {
+    return { status: "pending", prompt, verdict: null, decision: null };
+  }
+  const raw = await options.produceVerdict(prompt);
+  const verdict = parseVerifyVerdict(raw);
+  const decision = evaluateVerifyGate(verdict, options.gate ?? {});
+  return { status: decision.blocked ? "blocked" : "passed", prompt, verdict, decision };
+}

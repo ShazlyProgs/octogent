@@ -11,12 +11,27 @@
  * Usage (from the octogent repo root, daemon running):
  *   pnpm fleet:spawn -- [--execute] [--boss-terminal-id <id>]
  *                       [--api-base http://127.0.0.1:8787] [--state-dir <path>]
+ *                       [--verify]   (or env OCTOGENT_FLEET_VERIFY=1)
+ *
+ * --verify runs the D4 adversarial-verify auto-run over the completed spawn and appends
+ * the audit artifact to <stateDir>/fleet-verify.log.jsonl (gate blocks the spawn on
+ * REJECT). Without a wired verdict producer the audit prompt is recorded PENDING for an
+ * operator/agent to run — it is never fabricated. Only takes effect with --execute.
  */
 
-import { cpSync, existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
-import { type FleetManifest, buildFleetSpawnPlan, parseFleetManifest } from "@octogent/core";
+import {
+  type FleetManifest,
+  type VerdictProducer,
+  type VerifyGateDecision,
+  type VerifyVerdict,
+  type WorkProductDescriptor,
+  buildFleetSpawnPlan,
+  parseFleetManifest,
+  runAutoVerify,
+} from "@octogent/core";
 
 export type FleetStageAction = {
   roleId: string;
@@ -108,6 +123,114 @@ export const buildTerminalRequests = (
   });
 };
 
+// ---------------------------------------------------------------------------
+// D4 auto-verify hook (#45 W-ORCH-NATIVE Phase 2 [D4] quality parity).
+//
+// The fleet spawn is itself a work product ("stood up N standing tentacles
+// parent-before-child, no orphaned child"). This config-gated hook audits that
+// claim with the adversarial-verify harness (@octogent/core runAutoVerify),
+// records the artifact, and GATES on REJECT — the "auto-run in the spawn loop"
+// milestone the VERIFY-HARNESS.md cut-line deferred. Separable from the LATER A5
+// autonomous loop ([D7]): the verdict PRODUCER is injected (default: none ⇒ the
+// audit prompt is recorded PENDING for an operator/agent to run — it never
+// fabricates a verdict). See fleet/VERIFY-HARNESS.md.
+// ---------------------------------------------------------------------------
+
+export type FleetVerifyArtifact = {
+  fleetId: string;
+  spawnedRoleIds: string[];
+  status: "passed" | "blocked" | "pending";
+  /** The emitted refute-by-default audit prompt (always present). */
+  prompt: string;
+  /** Parsed verdict, or null when no producer was supplied (status "pending"). */
+  verdict: VerifyVerdict | null;
+  decision: VerifyGateDecision | null;
+  at: string;
+};
+
+export type FleetVerifyConfig = {
+  enabled: boolean;
+  /** Injected LLM/agent that runs the emitted audit prompt. Omit ⇒ PENDING record. */
+  produceVerdict?: VerdictProducer;
+  /** Sink for the audit artifact (append to a log, POST to a bus, etc.). */
+  record: (artifact: FleetVerifyArtifact) => void;
+  /** Block the spawn on APPROVE_WITH_FIXES too (default false). */
+  blockOnFixes?: boolean;
+};
+
+export class FleetVerifyBlockedError extends Error {
+  readonly artifact: FleetVerifyArtifact;
+  constructor(artifact: FleetVerifyArtifact) {
+    super(`Fleet spawn blocked by adversarial-verify: ${artifact.decision?.reason ?? "REJECT"}`);
+    this.name = "FleetVerifyBlockedError";
+    this.artifact = artifact;
+  }
+}
+
+/** Describe the completed spawn as a work product for the adversarial verifier. */
+export const buildFleetSpawnVerifyDescriptor = (
+  manifest: FleetManifest,
+  spawned: Map<string, string>,
+): WorkProductDescriptor => {
+  const roleIds = [...spawned.keys()];
+  const expectedRoots = manifest.roles
+    .filter((role) => role.parentRoleId === null)
+    .map((role) => role.id);
+  return {
+    title: `fleet "${manifest.fleetId}" standing spawn`,
+    claim: `The fleet spawn stood up ${roleIds.length} standing C-suite tentacle(s) parent-before-child, each registered on the deck and given a live terminal id, with no orphaned child.`,
+    scope:
+      "fleet spawn only — the standing C-suite tentacles declared in fleet.json; NOT specialist worktrees and NO back-office mutation.",
+    evidence: roleIds.map((roleId) => ({
+      kind: "terminal",
+      reference: `${roleId} -> ${spawned.get(roleId) ?? "(missing)"}`,
+      detail: "spawned terminal id",
+    })),
+    context: `#45 W-ORCH-NATIVE Phase 2 [D4] auto-verify hook. fleet.json declares ${manifest.roles.length} role(s); expected root(s): ${expectedRoots.join(", ") || "(none)"}.`,
+  };
+};
+
+/**
+ * Run the adversarial-verify auto-run over a completed spawn, record the artifact, and
+ * throw FleetVerifyBlockedError when the gate blocks (REJECT, or APPROVE_WITH_FIXES with
+ * blockOnFixes). With no producer the artifact is recorded PENDING and never blocks.
+ */
+export const runFleetSpawnVerify = async (
+  manifest: FleetManifest,
+  spawned: Map<string, string>,
+  config: FleetVerifyConfig,
+): Promise<FleetVerifyArtifact> => {
+  const descriptor = buildFleetSpawnVerifyDescriptor(manifest, spawned);
+  const result = await runAutoVerify(descriptor, {
+    ...(config.produceVerdict ? { produceVerdict: config.produceVerdict } : {}),
+    gate: { blockOnFixes: config.blockOnFixes ?? false },
+  });
+  const artifact: FleetVerifyArtifact = {
+    fleetId: manifest.fleetId,
+    spawnedRoleIds: [...spawned.keys()],
+    status: result.status,
+    prompt: result.prompt,
+    verdict: result.verdict,
+    decision: result.decision,
+    at: new Date().toISOString(),
+  };
+  config.record(artifact);
+  if (result.status === "blocked") {
+    throw new FleetVerifyBlockedError(artifact);
+  }
+  return artifact;
+};
+
+/** Default record sink for the CLI path — append one JSON line per audit to the state dir. */
+export const appendFleetVerifyArtifact = (
+  stateDir: string,
+  artifact: FleetVerifyArtifact,
+): void => {
+  const logPath = join(stateDir, "fleet-verify.log.jsonl");
+  mkdirSync(dirname(logPath), { recursive: true });
+  appendFileSync(logPath, `${JSON.stringify(artifact)}\n`, "utf8");
+};
+
 type ExecuteOptions = {
   packageRoot: string;
   stateDir: string;
@@ -115,6 +238,8 @@ type ExecuteOptions = {
   bossTerminalId?: string | undefined;
   execute: boolean;
   log: (line: string) => void;
+  /** D4 auto-verify hook — audits the spawn + gates on REJECT. Omit ⇒ no verify. */
+  verify?: FleetVerifyConfig | undefined;
 };
 
 const postJson = async (
@@ -209,6 +334,20 @@ export const runFleetSpawn = async (options: ExecuteOptions): Promise<void> => {
     log(`spawn  ${request.roleId}: terminal "${terminalId}" created`);
   }
 
+  // 4. D4 auto-verify hook (config-gated) — audit the spawn as a work product and
+  //    gate on REJECT. Records the artifact; throws FleetVerifyBlockedError on block.
+  if (execute && options.verify?.enabled) {
+    log(`verify ${manifest.fleetId}: adversarial-verify of the fleet spawn`);
+    const artifact = await runFleetSpawnVerify(manifest, terminalIdsByRole, options.verify);
+    log(
+      `verify ${manifest.fleetId}: ${artifact.status}${
+        artifact.decision
+          ? ` — ${artifact.decision.reason}`
+          : " (no verdict producer — recorded PENDING for manual/agent audit)"
+      }`,
+    );
+  }
+
   log(execute ? "Fleet spawn complete." : "Dry-run complete. Nothing was changed.");
 };
 
@@ -227,6 +366,7 @@ if (isDirectInvocation()) {
   const argv = process.argv.slice(2);
   const packageRoot = resolve(import.meta.dirname ?? ".", "..", "..", "..");
   const stateDir = parseCliFlag(argv, "--state-dir") ?? resolveDefaultStateDir(packageRoot);
+  const verifyEnabled = process.env.OCTOGENT_FLEET_VERIFY === "1" || argv.includes("--verify");
   runFleetSpawn({
     packageRoot,
     stateDir,
@@ -234,6 +374,16 @@ if (isDirectInvocation()) {
     bossTerminalId: parseCliFlag(argv, "--boss-terminal-id"),
     execute: argv.includes("--execute"),
     log: (line) => console.log(line),
+    ...(verifyEnabled
+      ? {
+          verify: {
+            enabled: true,
+            blockOnFixes: process.env.OCTOGENT_FLEET_VERIFY_BLOCK_ON_FIXES === "1",
+            record: (artifact: FleetVerifyArtifact) =>
+              appendFleetVerifyArtifact(stateDir, artifact),
+          },
+        }
+      : {}),
   }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

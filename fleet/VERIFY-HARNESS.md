@@ -10,8 +10,9 @@ The retired `:3001` delegation engine scored work products with a bespoke scorin
 
 | Path | What |
 |---|---|
-| `../packages/core/src/application/verifyHarness.ts` | Pure, dependency-light core: `buildVerifyPrompt(descriptor)` (the refute-by-default audit prompt), `VERIFY_VERDICT_JSON_SCHEMA` + `parseVerifyVerdict(raw)` (the structured verdict schema + validator). No I/O. Tests: `packages/core/tests/verifyHarness.test.ts`. |
+| `../packages/core/src/application/verifyHarness.ts` | Pure, dependency-light core: `buildVerifyPrompt(descriptor)` (the refute-by-default audit prompt), `VERIFY_VERDICT_JSON_SCHEMA` + `parseVerifyVerdict(raw)` (the structured verdict schema + validator), and the **auto-run** layer `evaluateVerifyGate(verdict)` (deterministic REJECT-blocks gate) + `runAutoVerify(descriptor, {produceVerdict})` (build prompt → run via injected producer → validate → gate). No I/O; the verdict producer is injected. Tests: `packages/core/tests/verifyHarness.test.ts`. |
 | `../apps/api/src/cli.ts` | `octogent verify` — emits the prompt (or `--schema`) for an operator/agent to run. |
+| `../apps/api/src/fleetSpawn.ts` | **Auto-run hook in the fleet spawn loop** (`--verify` / `OCTOGENT_FLEET_VERIFY=1`): after `--execute` it audits the completed spawn as a work product (`buildFleetSpawnVerifyDescriptor` → `runFleetSpawnVerify`), records the artifact to `<stateDir>/fleet-verify.log.jsonl`, and gates on REJECT (`FleetVerifyBlockedError`). Tests: `apps/api/tests/fleetSpawnVerify.test.ts`. |
 
 ## The verdict schema (mirrors the wave `AUDIT_SCHEMA`)
 
@@ -39,7 +40,17 @@ node bin/octogent verify --descriptor '{"title":"...","claim":"...","evidence":[
 
 The emitted prompt is fed to a **separate** auditing agent. It assumes the work product is BROKEN, restates the claim as checkable assertions, enumerates how each could be false, re-verifies every claimed evidence item against ground truth, hunts for missing refuting evidence, and returns ONLY the verdict JSON. The caller validates that JSON with `parseVerifyVerdict`.
 
-## Cut-line (first cut — deliberately not yet)
+## Auto-run (Phase-2 tail — delivered 2026-07-04, r92 p2-tails)
 
-- **No auto-run / no scoring loop** — this emits the prompt + validates the verdict; wiring it into the fleet spawn loop (audit every work product automatically, gate on `REJECT`) and the A5 eval suite is the next milestone.
+The "next milestone" auto-run is now built as a **config-gated hook in the fleet spawn loop**, separable from the LATER A5 autonomous loop ([D7]):
+
+- `evaluateVerifyGate(verdict, {blockOnFixes?})` — deterministic gate: REJECT always blocks, APPROVE never blocks, APPROVE_WITH_FIXES blocks only under `blockOnFixes`. Pure, no model.
+- `runAutoVerify(descriptor, {produceVerdict?, gate?})` — builds the prompt, runs it via the **injected** producer, validates the verdict, applies the gate. With **no** producer it returns `status:"pending"` carrying the prompt — it never fabricates a verdict.
+- `runFleetSpawn(... , {verify})` — after `--execute`, audits the spawn (`buildFleetSpawnVerifyDescriptor`), records the artifact via the injected sink, and **throws `FleetVerifyBlockedError` on a blocked gate**. CLI: `pnpm fleet:spawn -- --execute --verify` (or `OCTOGENT_FLEET_VERIFY=1`) → appends `<stateDir>/fleet-verify.log.jsonl`.
+
+Why this is separable from A5: it is a **deterministic per-work-product gate**, not a self-driving loop. The A5-1..4 forks gate the *autonomous* meta-harness (build-plan Phase 6 [D7], "LATER"); this hook needs none of them — the verdict PRODUCER is injected, so wiring an LLM/agent adapter (or the A5 eval suite) is an additive follow-up.
+
+## Cut-line (still deliberately not yet)
+
+- **No wired verdict producer / no A5 eval suite** — the auto-run hook records the audit prompt PENDING when no producer is injected; wiring a live LLM/agent producer (auto-audit every work product with a real model) and the A5 autonomous eval suite is the LATER [D7] milestone.
 - **No planted-error live proof** — the build-plan Phase-2 verify ("adversarial-verify catches a planted error" in a real end-to-end delegation) is operator-gated on the live fleet. Build-complete ≠ proven-on-box.
