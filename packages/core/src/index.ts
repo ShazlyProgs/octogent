@@ -1,5 +1,6 @@
 export * from "./application/buildTerminalList";
 export * from "./application/fleetPlan";
+export * from "./application/attachDocument";
 export * from "./application/backOfficeTools";
 export * from "./application/chatParity";
 export * from "./application/conversationSummary";

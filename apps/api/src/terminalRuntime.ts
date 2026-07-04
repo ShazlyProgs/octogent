@@ -1,9 +1,11 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 
 import type { TerminalSnapshot } from "@octogent/core";
 import {
+  AttachDocumentError,
   ConversationRenameError,
   CreateConversationError,
   SendMessageError,
@@ -11,6 +13,7 @@ import {
   buildConversationRename,
   buildConversationSummaryText,
   buildCreateConversationRequest,
+  buildDocumentAttachment,
   deriveConversationTitle,
   resolveSendMessageDisposition,
 } from "@octogent/core";
@@ -119,6 +122,24 @@ export type GenerateConversationTitleResult =
  */
 export type SummarizeConversationResult =
   | { status: "summarized"; sessionId: string; summary: string }
+  | { status: "no-conversation" };
+
+/**
+ * Result of attaching a document to a conversation (#45 Phase 3 [D9] attach-document adapter).
+ * Discriminated so the HTTP route maps each case: attached → 201, invalid → 400, no-conversation
+ * → 404. NOTE: this is the REAL groundwork (write into the tentacle workspace + transcript link) —
+ * the chat-parity row stays UNPROVEN pending a per-conversation document store + agent-ingestion
+ * path; see application/attachDocument.ts + fleet/CHAT-PARITY.md.
+ */
+export type AttachDocumentResult =
+  | {
+      status: "attached";
+      sessionId: string;
+      filename: string;
+      path: string;
+      byteLength: number;
+    }
+  | { status: "invalid"; error: string }
   | { status: "no-conversation" };
 
 export const createTerminalRuntime = ({
@@ -601,6 +622,74 @@ export const createTerminalRuntime = ({
 
       writeConversationMeta(transcriptDirectoryPath, sessionId, { summary });
       return { status: "summarized", sessionId, summary };
+    },
+
+    // #45 Phase 3 [D9] chat attach-document adapter — the REAL groundwork (NOT flipped to proven).
+    // The octogent-native form of the legacy dashboard Chat's `POST /:id/upload`: persist the
+    // upload into the tentacle's workspace (per the D9 parity note) under a conversation-scoped
+    // attachments dir, and surface a transcript note when a live session exists. Validated by the
+    // pure buildDocumentAttachment contract (filename sanitize + size cap).
+    //
+    // Honest gap (why chat-parity stays UNPROVEN): octogent has no per-conversation document store
+    // — for a shared conversation the "workspace" is the whole repo root, so this writes to an
+    // ad-hoc `.octogent/attachments/<sessionId>/` subdir — and nothing DELIVERS the document into
+    // the live agent's context the way the legacy message-append did. See fleet/CHAT-PARITY.md.
+    attachDocumentToConversation(sessionId: string, input: unknown): AttachDocumentResult {
+      let normalized: ReturnType<typeof buildDocumentAttachment>;
+      try {
+        normalized = buildDocumentAttachment((input ?? {}) as Record<string, unknown>);
+      } catch (error) {
+        if (error instanceof AttachDocumentError) {
+          return { status: "invalid", error: error.message };
+        }
+        throw error;
+      }
+
+      const exists =
+        terminals.has(sessionId) ||
+        readConversationSession(transcriptDirectoryPath, sessionId) !== null;
+      if (!exists) {
+        return { status: "no-conversation" };
+      }
+
+      // Resolve the tentacle's workspace (shared → repo root; worktree → the worktree dir). If no
+      // terminal record backs the identifier, getTentacleWorkspaceCwd throws — fall back to the
+      // project workspace root.
+      let cwd = workspaceCwd;
+      const resolved = resolveTerminalSession(sessionId);
+      if (resolved) {
+        try {
+          cwd = worktreeManager.getTentacleWorkspaceCwd(resolved.tentacleId);
+        } catch {
+          cwd = workspaceCwd;
+        }
+      }
+
+      const relativeDir = join(".octogent", "attachments", encodeURIComponent(sessionId));
+      const absoluteDir = join(cwd, relativeDir);
+      mkdirSync(absoluteDir, { recursive: true });
+      writeFileSync(join(absoluteDir, normalized.safeFilename), normalized.content, "utf8");
+      const relativePath = join(relativeDir, normalized.safeFilename);
+
+      // Best-effort conversation linkage: record the attachment in the transcript when a live
+      // session exists. This surfaces it in the conversation events (not as a turn — turn counts
+      // come from Claude Code's Stop hook) but does NOT feed the content to the live agent.
+      if (sessions.has(sessionId)) {
+        conversationMessageCounter += 1;
+        sessionRuntime.recordInputSubmit(
+          sessionId,
+          `${sessionId}:attach:${conversationMessageCounter}`,
+          `[Attached document: ${normalized.safeFilename}]`,
+        );
+      }
+
+      return {
+        status: "attached",
+        sessionId,
+        filename: normalized.safeFilename,
+        path: relativePath,
+        byteLength: normalized.byteLength,
+      };
     },
 
     // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's

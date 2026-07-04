@@ -12,6 +12,7 @@ import { logVerbose } from "../logging";
 import type { MonitorService } from "../monitor";
 import { handleCodeIntelEventsRoute } from "./codeIntelRoutes";
 import {
+  handleConversationDocumentsRoute,
   handleConversationExportRoute,
   handleConversationItemRoute,
   handleConversationMessagesRoute,
@@ -146,6 +147,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleConversationMessagesRoute,
       handleConversationTitleRoute,
       handleConversationSummarizeRoute,
+      handleConversationDocumentsRoute,
       handleConversationItemRoute,
     ],
   ],

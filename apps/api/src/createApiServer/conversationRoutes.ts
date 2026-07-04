@@ -13,6 +13,7 @@ const CONVERSATION_EXPORT_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/export
 const CONVERSATION_MESSAGES_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/messages$/;
 const CONVERSATION_TITLE_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/title$/;
 const CONVERSATION_SUMMARIZE_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/summarize$/;
+const CONVERSATION_DOCUMENTS_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/documents$/;
 
 export const handleConversationsCollectionRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
@@ -215,6 +216,57 @@ export const handleConversationSummarizeRoute: ApiRouteHandler = async (
   }
 
   writeJson(response, 200, { sessionId: result.sessionId, summary: result.summary }, corsOrigin);
+  return true;
+};
+
+// #45 Phase 3 [D9] — attach-document adapter (REAL groundwork; the chat-parity row stays UNPROVEN
+// pending a per-conversation document store — see fleet/CHAT-PARITY.md). Parity with the legacy
+// POST /:id/upload: persist an uploaded text document into the tentacle's workspace. Accepts JSON
+// { filename, content } (a simplification of the legacy multipart form — octogent's request layer
+// is JSON-only). Returns 201 attached / 400 invalid / 404 no-conversation.
+export const handleConversationDocumentsRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const match = requestUrl.pathname.match(CONVERSATION_DOCUMENTS_PATH_PATTERN);
+  if (!match) {
+    return false;
+  }
+
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!bodyReadResult.ok) {
+    return true;
+  }
+
+  const sessionId = decodeURIComponent(match[1] ?? "");
+  const result = runtime.attachDocumentToConversation(sessionId, bodyReadResult.payload);
+
+  if (result.status === "invalid") {
+    writeJson(response, 400, { error: result.error }, corsOrigin);
+    return true;
+  }
+
+  if (result.status === "no-conversation") {
+    writeJson(response, 404, { error: "Conversation session not found." }, corsOrigin);
+    return true;
+  }
+
+  writeJson(
+    response,
+    201,
+    {
+      sessionId: result.sessionId,
+      filename: result.filename,
+      path: result.path,
+      byteLength: result.byteLength,
+    },
+    corsOrigin,
+  );
   return true;
 };
 

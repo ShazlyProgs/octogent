@@ -171,7 +171,12 @@ const CHAT_PARITY: ChatParityCapability[] = [
     title: "Attach a document to a conversation",
     legacyRoute: "POST /:id/upload",
     disposition: "adapter",
-    octogentParity: "Write the upload into the tentacle's worktree workspace; adapter in apps/api.",
+    octogentParity:
+      "Write the upload into the tentacle's workspace (attachDocument.ts + runtime.attachDocumentToConversation). GROUNDWORK BUILT (Phase 3 m7) but NOT PROVEN: octogent has no per-conversation document store — a shared conversation's workspace is the repo root — and nothing delivers the document into the live agent's context the way the legacy message-append did. The disposition stays unproven pending a real document store + ingestion path.",
+    // NOT flipped — honesty-load-bearing D9 gate. The pure sanitize/size contract + the workspace
+    // write + the transcript link are real and tested, but full parity (a per-conversation document
+    // store the agent actually ingests) is not met, so parityProven stays false and retireReady
+    // stays NO. A false flip here would be the worst outcome. See fleet/CHAT-PARITY.md.
     parityProven: false,
   },
   // ---- Dropped — retire with the engine, do NOT reimplement ---------------
