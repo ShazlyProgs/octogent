@@ -5,6 +5,11 @@ import { basename, join, resolve } from "node:path";
 
 import {
   BackOfficeToolError,
+  type EvidenceItem,
+  VERIFY_VERDICT_JSON_SCHEMA,
+  VerifyHarnessError,
+  type WorkProductDescriptor,
+  buildVerifyPrompt,
   findBackOfficeTool,
   getBackOfficeToolDefinitions,
   toBackOfficeInputSchema,
@@ -440,6 +445,56 @@ const backOfficeCall = async () => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// D4 adversarial-verify (#45 W-ORCH-NATIVE Phase 2 quality parity). Emits the
+// refute-by-default audit prompt for a work product so an operator/agent can run
+// it; the structured verdict schema is `octogent verify --schema`. Pure prompt
+// builder lives in @octogent/core (verifyHarness). See fleet/VERIFY-HARNESS.md.
+// ---------------------------------------------------------------------------
+
+const runVerify = () => {
+  if (args.includes("--schema")) {
+    console.log(JSON.stringify(VERIFY_VERDICT_JSON_SCHEMA, null, 2));
+    return;
+  }
+
+  const descriptorRaw = parseFlag("--descriptor");
+  const base: Record<string, unknown> = descriptorRaw ? parseObjectFlag("--descriptor") : {};
+
+  const title = parseFlag("--title") ?? (typeof base.title === "string" ? base.title : undefined);
+  const claim = parseFlag("--claim") ?? (typeof base.claim === "string" ? base.claim : undefined);
+  const scope = parseFlag("--scope") ?? (typeof base.scope === "string" ? base.scope : undefined);
+  const context =
+    parseFlag("--context") ?? (typeof base.context === "string" ? base.context : undefined);
+
+  if (!title || !claim) {
+    console.error(
+      "Error: verify needs --title and --claim (or a --descriptor JSON with title + claim). Use `octogent verify --schema` to print the verdict schema.",
+    );
+    process.exit(1);
+  }
+
+  const descriptor: WorkProductDescriptor = { title, claim };
+  if (scope) descriptor.scope = scope;
+  if (context) descriptor.context = context;
+  if (Array.isArray(base.evidence)) {
+    descriptor.evidence = base.evidence as EvidenceItem[];
+  }
+
+  try {
+    console.log(buildVerifyPrompt(descriptor));
+  } catch (error) {
+    const message =
+      error instanceof VerifyHarnessError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+};
+
 const tentacleCreate = async () => {
   const name = args[2];
   if (!name || name.startsWith("-")) {
@@ -689,6 +744,10 @@ const main = async () => {
     }
   }
 
+  if (command === "verify") {
+    return runVerify();
+  }
+
   console.log(`Usage:
   octogent                             Start the dashboard in the current project
   octogent init [project-name]         Initialize the current directory explicitly
@@ -713,7 +772,15 @@ const main = async () => {
   octogent backoffice describe <tool>  Show a tool's HTTP mapping + input schema
   octogent backoffice call <tool>      Call a back-office tool
     --args '<json>'                    Tool arguments as a JSON object
-                                       (needs COLLEGA_BACKOFFICE_BASE_URL + _API_KEY)`);
+                                       (needs COLLEGA_BACKOFFICE_BASE_URL + _API_KEY)
+
+  octogent verify [options]            Emit the D4 refute-by-default audit prompt (#45 Phase 2)
+    --title <text>                     Work-product title
+    --claim <text>                     The claim to refute by default
+    --scope <text>                     In-scope fence (flags scope creep)
+    --context <text>                   Extra auditor context
+    --descriptor '<json>'              Full WorkProductDescriptor JSON (incl. evidence[])
+    --schema                           Print the verdict JSON schema instead of the prompt`);
   process.exit(1);
 };
 

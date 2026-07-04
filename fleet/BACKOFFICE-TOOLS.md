@@ -37,7 +37,7 @@ node bin/octogent backoffice call crm_create_lead --args '{"name":"Acme Srl","em
 
 Output is JSON: `{ ok, status, toolName, mutates, data }`. `mutates:true` marks write ops — the fleet treats those as actions, not reads (D4 adversarial-verify applies to any state change a tentacle drives).
 
-## Tool catalog (grounded against `server/routes/{crm,voice}.ts`)
+## Tool catalog (grounded against `server/routes/{crm,voice,cfo}.ts`)
 
 **CRM / waitlist** (`routes/crm.ts`)
 - `crm_list_leads` — GET `/api/crm/leads` (query: stage, tenant_id, limit, offset)
@@ -55,16 +55,18 @@ Output is JSON: `{ ok, status, toolName, mutates, data }`. `mutates:true` marks 
 - `voice_list_calls` — GET `/api/voice/calls` (query: limit)
 - `voice_reception_mode` — GET `/api/voice/reception-mode`
 
+**CFO finance** (`routes/cfo.ts` — added Phase-2 milestone 2)
+- `cfo_report` — GET `/api/cfo/report` — the read-only finance report (cashflow, business/personal spend split, Q2 deductible, recurring, anomalies, self-verify). Same data the WhatsApp `/cfo` digest renders; cached feed, no bank refresh, no WhatsApp send. Endpoint added on `:3001` branch `feat/45-phase2-tools`.
+
 Run `octogent backoffice list` for the live surface — the registry is the source of truth, this table mirrors it.
 
 ## Honest scope / cut-line (remaining Phase-2 work)
 
-This milestone delivers the **seam** + the **CRM + Sara voice** tools completely. Deliberately **not** in this milestone:
+Milestone 1 delivered the **seam** + **CRM + Sara voice** tools. Milestone 2 (this pass) added the **read-only `cfo_report`** tool (+ its new `:3001` `GET /api/cfo/report` endpoint on branch `feat/45-phase2-tools`) and the **D4 adversarial-verify harness** (`packages/core/src/application/verifyHarness.ts` + `octogent verify` CLI + `fleet/VERIFY-HARNESS.md`). Deliberately **still not** delivered:
 
-- **WhatsApp + `/cfo`** — `/cfo` is a *signed WhatsApp-inbound command bridge* (`routes/public.ts` + `whatsapp/command-bridge.ts`), not a clean queryable REST route. Exposing it as a fleet tool needs a new read-only `:3001` endpoint (scope-gated: `:3001` changes only as the build plan requires, on branch `feat/45-phase2-tools`).
+- **WhatsApp inbound `/cfo` bridge** — the *signed WhatsApp-inbound command bridge* (`routes/public.ts` + `whatsapp/command-bridge.ts`) stays out; it is a webhook path, not a fleet-callable REST route. The fleet now reads the SAME finance data through the read-only `cfo_report` tool instead — no WhatsApp side-effects.
 - **KB** — the CollegaRAG knowledge base is a *separate loopback MCP* on Box B (`:8000`, auth-on), not a `:3001` REST route; the fleet consumes it via its own MCP config, not this seam. (`:3001`'s `/api/corpora` is a memory-corpus surface, a different thing.)
 - **email/cadence** — no read tool added yet; add in the same registry pattern when a use-case lands.
-- **Quality parity (D4) harness** — the adversarial-verify *pattern* is already in `prompts/csuite-agent-init.md` § Delegation model; a reusable verify/eval **harness** (A5 evals) is the next Phase-2 milestone.
 - **Live parity proof** — the build-plan Phase-2 verify ("fleet completes a real end-to-end delegation, adversarial-verify catches a planted error") is **operator-gated**: it needs the live fleet stood up (operator-gated) + the live Box-B `:3001` reachable. Build-complete ≠ proven-on-box — reground before asserting.
 
 Adding a tool is additive: append a grounded `BackOfficeToolDefinition` to `backOfficeTools.ts` (verify the route exists in `server/routes/*` first — never advertise an endpoint the backend lacks) and it appears in `list`/`describe`/`call` automatically.

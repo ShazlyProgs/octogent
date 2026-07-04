@@ -9,14 +9,24 @@ import {
 } from "../src/application/backOfficeTools";
 
 describe("back-office tool registry", () => {
-  it("exposes only KEEP-list services (crm + voice), never engine tools", () => {
+  it("exposes only KEEP-list services (crm + voice + cfo), never engine tools", () => {
     const tools = getBackOfficeToolDefinitions();
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {
-      expect(["crm", "voice"]).toContain(tool.service);
+      expect(["crm", "voice", "cfo"]).toContain(tool.service);
       // Engine tools (retired by #45) must never leak into the fleet's tool surface.
       expect(tool.name).not.toMatch(/delegate|execute|chat/);
     }
+  });
+
+  it("includes the read-only cfo_report tool (#45 Phase 2 milestone 2), no write CFO tool", () => {
+    const tools = getBackOfficeToolDefinitions();
+    const cfo = tools.filter((t) => t.service === "cfo");
+    expect(cfo.map((t) => t.name)).toEqual(["cfo_report"]);
+    expect(cfo[0]?.method).toBe("GET");
+    expect(cfo[0]?.pathTemplate).toBe("/api/cfo/report");
+    // Finance surface is read-only — nothing that mutates money state.
+    for (const t of cfo) expect(t.mutates).toBe(false);
   });
 
   it("has unique tool names and valid HTTP methods", () => {

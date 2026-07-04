@@ -12,12 +12,15 @@
  * DELIBERATELY EXCLUDED: the legacy engine tools (execute / delegate / chat). Those are
  * being retired by #45; exposing them here would let the fleet call the very engine it
  * replaces (csuite-agent-init.md § Delegation model). Only the KEEP-list back-office
- * services (decision doc §3) appear — currently CRM (routes/crm.ts) and Sara voice
- * (routes/voice.ts). WhatsApp/`cfo` (signed inbound bridge) and the CollegaRAG KB
- * (separate loopback MCP, not a :3001 REST route) are follow-ups — see fleet/BACKOFFICE-TOOLS.md.
+ * services (decision doc §3) appear — currently CRM (routes/crm.ts), Sara voice
+ * (routes/voice.ts), and the read-only CFO finance report (routes/cfo.ts). The WhatsApp
+ * `/cfo` INBOUND bridge itself stays out (it is a signed WhatsApp webhook path, not a
+ * fleet-callable REST route); the fleet consumes the SAME finance data through the new
+ * read-only GET /api/cfo/report instead. The CollegaRAG KB (separate loopback MCP, not a
+ * :3001 REST route) is a follow-up — see fleet/BACKOFFICE-TOOLS.md.
  */
 
-export type BackOfficeService = "crm" | "voice";
+export type BackOfficeService = "crm" | "voice" | "cfo";
 
 export type BackOfficeMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -228,6 +231,16 @@ const BACK_OFFICE_TOOLS: BackOfficeToolDefinition[] = [
     method: "GET",
     pathTemplate: "/api/voice/reception-mode",
     description: "Get the active receptionist mode and the available modes.",
+    mutates: false,
+  },
+  // ---- CFO finance (routes/cfo.ts — read-only observability report) --------
+  {
+    name: "cfo_report",
+    service: "cfo",
+    method: "GET",
+    pathTemplate: "/api/cfo/report",
+    description:
+      "Get the read-only CFO finance report (cashflow, business/personal spend split, Q2 deductible, recurring costs, anomalies, self-verify checks) — the same data the WhatsApp /cfo digest renders. Read-only: cached feed, no bank refresh, no WhatsApp send.",
     mutates: false,
   },
 ];
