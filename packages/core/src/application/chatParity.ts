@@ -125,7 +125,11 @@ const CHAT_PARITY: ChatParityCapability[] = [
     disposition: "adapter",
     octogentParity:
       "KEYSTONE: submit input to the tentacle session (terminal runtime input-submit) + surface the transcript reply, with the legacy per-conversation processing lock. Tentacles ARE Claude Code sessions ([D8]) so no claude-client.ts in the loop.",
-    parityProven: false,
+    // PROVEN — Phase 3 milestone 2 (MASTER-LIST r92): the send-message adapter is live. Pure
+    // contract in application/sendMessage.ts (content validation + B.14 processing lock +
+    // bracketed-paste PTY submit); wired as runtime.submitConversationMessage +
+    // POST /api/conversations/:id/messages; reply surfaced by the already-native transcript read.
+    parityProven: true,
   },
   {
     id: "conversation-title",

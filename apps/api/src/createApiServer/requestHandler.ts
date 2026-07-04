@@ -14,6 +14,7 @@ import { handleCodeIntelEventsRoute } from "./codeIntelRoutes";
 import {
   handleConversationExportRoute,
   handleConversationItemRoute,
+  handleConversationMessagesRoute,
   handleConversationSearchRoute,
   handleConversationsCollectionRoute,
 } from "./conversationRoutes";
@@ -140,6 +141,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleConversationsCollectionRoute,
       handleConversationSearchRoute,
       handleConversationExportRoute,
+      handleConversationMessagesRoute,
       handleConversationItemRoute,
     ],
   ],

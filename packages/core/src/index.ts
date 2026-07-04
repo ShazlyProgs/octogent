@@ -2,6 +2,7 @@ export * from "./application/buildTerminalList";
 export * from "./application/fleetPlan";
 export * from "./application/backOfficeTools";
 export * from "./application/chatParity";
+export * from "./application/sendMessage";
 export * from "./application/verifyHarness";
 export * from "./adapters/InMemoryTerminalSnapshotReader";
 export * from "./domain/terminal";

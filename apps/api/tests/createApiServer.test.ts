@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,6 +12,25 @@ const { spawnMock } = vi.hoisted(() => ({
 vi.mock("node-pty", () => ({
   spawn: spawnMock,
 }));
+
+// Minimal PTY double for the tests that need a LIVE terminal session (send-message adapter).
+// Most tests here leave spawnMock returning undefined (no live session); the send-message route
+// tests set spawnMock.mockReturnValue(new FakePty()) so startSession spawns a real session.
+class FakePty extends EventEmitter {
+  write = vi.fn();
+  resize = vi.fn();
+  kill = vi.fn();
+
+  onData(listener: (chunk: string) => void) {
+    this.on("data", listener);
+    return { dispose: () => this.off("data", listener) };
+  }
+
+  onExit(listener: (event: { exitCode: number; signal: number }) => void) {
+    this.on("exit", listener);
+    return { dispose: () => this.off("exit", listener) };
+  }
+}
 
 import { createApiServer } from "../src/createApiServer";
 import type { GitHubRepoSummarySnapshot } from "../src/githubRepoSummary";
@@ -3203,5 +3223,102 @@ describe("createApiServer", () => {
         }),
       ]),
     );
+  });
+
+  // ── #45 Phase 3 [D9] send-message adapter — HTTP route (POST /api/conversations/:id/messages) ──
+
+  const createLiveSessionServer = async () => {
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    spawnMock.mockReturnValue(new FakePty());
+    const baseUrl = await startServer({ workspaceCwd });
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        terminalId: "terminal-1",
+        initialPrompt: "You are the CEO tentacle.",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+    return baseUrl;
+  };
+
+  it("POST /api/conversations/:id/messages accepts a chat turn (202) for a live session", async () => {
+    const baseUrl = await createLiveSessionServer();
+
+    const response = await fetch(`${baseUrl}/api/conversations/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Draft the launch note" }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual({
+      status: "accepted",
+      sessionId: "terminal-1",
+      submitId: "terminal-1:msg:1",
+      tentacleId: "terminal-1",
+      content: "Draft the launch note",
+    });
+  });
+
+  it("POST /api/conversations/:id/messages returns 409 while the conversation is processing", async () => {
+    const baseUrl = await createLiveSessionServer();
+
+    const first = await fetch(`${baseUrl}/api/conversations/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "first" }),
+    });
+    expect(first.status).toBe(202);
+
+    const second = await fetch(`${baseUrl}/api/conversations/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "second" }),
+    });
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toEqual({
+      error: "Conversation is currently processing a message",
+    });
+  });
+
+  it("POST /api/conversations/:id/messages returns 404 when no live session exists", async () => {
+    const baseUrl = await createLiveSessionServer();
+
+    const response = await fetch(`${baseUrl}/api/conversations/ghost-terminal/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "anyone there?" }),
+    });
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "Conversation session not found.",
+    });
+  });
+
+  it("POST /api/conversations/:id/messages returns 400 for empty content", async () => {
+    const baseUrl = await createLiveSessionServer();
+
+    const response = await fetch(`${baseUrl}/api/conversations/terminal-1/messages`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "   " }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "content is required" });
+  });
+
+  it("returns 405 for GET on /api/conversations/:id/messages", async () => {
+    const baseUrl = await createLiveSessionServer();
+
+    const response = await fetch(`${baseUrl}/api/conversations/terminal-1/messages`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    expect(response.status).toBe(405);
+
+    spawnMock.mockReset();
   });
 });

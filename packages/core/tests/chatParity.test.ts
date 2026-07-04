@@ -33,11 +33,13 @@ describe("chat-parity registry (#45 Phase 3 [D9])", () => {
     for (const cap of native) expect(cap.parityProven).toBe(true);
   });
 
-  it("keeps the chat turn (send-message) as an unproven adapter, not native or dropped", () => {
+  it("keeps the chat turn (send-message) as a PROVEN adapter (Phase 3 m2), not native or dropped", () => {
     const sendMessage = findChatParityCapability("send-message");
     expect(sendMessage).toBeDefined();
+    // Still an adapter (thin octogent-native wiring over existing primitives), but now landed +
+    // verified, so its parity is proven — the keystone milestone.
     expect(sendMessage?.disposition).toBe("adapter");
-    expect(sendMessage?.parityProven).toBe(false);
+    expect(sendMessage?.parityProven).toBe(true);
     expect(sendMessage?.legacyRoute).toBe("POST /:id/messages");
   });
 
@@ -53,14 +55,16 @@ describe("chat-parity registry (#45 Phase 3 [D9])", () => {
     expect(delegate?.octogentParity).toMatch(/tentacle-tree|channel messaging/i);
   });
 
-  it("is NOT retire-ready while adapters are unproven (D9 no-hard-cut gate)", () => {
+  it("is NOT retire-ready while adapters remain unproven (D9 no-hard-cut gate)", () => {
     const summary = summarizeChatParity();
     expect(summary.total).toBe(getChatParityCapabilities().length);
     expect(summary.native + summary.adapter + summary.drop).toBe(summary.total);
     expect(summary.retireReady).toBe(false);
-    // Every unproven adapter is surfaced as remaining Phase 3 work.
-    expect(summary.pendingAdapters.length).toBe(summary.adapter);
-    expect(summary.pendingAdapters).toContain("send-message");
+    // send-message is now proven (Phase 3 m2), so it drops OFF the pending list — one fewer than
+    // the total adapter count — while the remaining adapters keep the retire gate shut.
+    expect(summary.pendingAdapters.length).toBe(summary.adapter - 1);
+    expect(summary.pendingAdapters).not.toContain("send-message");
+    expect(summary.pendingAdapters.length).toBeGreaterThan(0);
   });
 
   it("becomes retire-ready only once every adapter is proven (drops are excluded from the gate)", () => {

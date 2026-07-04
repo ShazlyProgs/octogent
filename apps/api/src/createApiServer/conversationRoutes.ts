@@ -1,9 +1,16 @@
 import type { ApiRouteHandler } from "./routeHelpers";
-import { writeJson, writeMethodNotAllowed, writeNoContent, writeText } from "./routeHelpers";
+import {
+  readJsonBodyOrWriteError,
+  writeJson,
+  writeMethodNotAllowed,
+  writeNoContent,
+  writeText,
+} from "./routeHelpers";
 
 const CONVERSATION_SEARCH_PATH = "/api/conversations/search";
 const CONVERSATION_ITEM_PATH_PATTERN = /^\/api\/conversations\/([^/]+)$/;
 const CONVERSATION_EXPORT_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/export$/;
+const CONVERSATION_MESSAGES_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/messages$/;
 
 export const handleConversationsCollectionRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
@@ -50,6 +57,71 @@ export const handleConversationSearchRoute: ApiRouteHandler = async (
 
   const payload = runtime.searchConversations(query);
   writeJson(response, 200, payload, corsOrigin);
+  return true;
+};
+
+// #45 Phase 3 [D9] — send-message KEYSTONE adapter. Parity with the legacy dashboard Chat's
+// POST /:id/messages: submit a chat turn into the conversation's live tentacle session, with the
+// per-conversation processing lock. The reply is surfaced by the native GET /api/conversations/:id
+// (Claude Code's Stop hook writes the turns) — this route is the SUBMIT half, so it returns 202
+// Accepted, not the assistant reply inline. See fleet/CHAT-PARITY.md.
+export const handleConversationMessagesRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const match = requestUrl.pathname.match(CONVERSATION_MESSAGES_PATH_PATTERN);
+  if (!match) {
+    return false;
+  }
+
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!bodyReadResult.ok) {
+    return true;
+  }
+
+  const sessionId = decodeURIComponent(match[1] ?? "");
+  const body = bodyReadResult.payload as Record<string, unknown> | null;
+  const content = body ? body.content : undefined;
+
+  const result = runtime.submitConversationMessage(sessionId, content);
+
+  if (result.status === "invalid-content") {
+    writeJson(response, 400, { error: result.error }, corsOrigin);
+    return true;
+  }
+
+  if (result.status === "no-session") {
+    writeJson(response, 404, { error: "Conversation session not found." }, corsOrigin);
+    return true;
+  }
+
+  if (result.status === "busy") {
+    writeJson(
+      response,
+      409,
+      { error: "Conversation is currently processing a message" },
+      corsOrigin,
+    );
+    return true;
+  }
+
+  writeJson(
+    response,
+    202,
+    {
+      status: "accepted",
+      sessionId,
+      submitId: result.submitId,
+      tentacleId: result.tentacleId,
+      content: result.text,
+    },
+    corsOrigin,
+  );
   return true;
 };
 

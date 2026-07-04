@@ -718,6 +718,25 @@ export const createSessionRuntime = ({
     return true;
   };
 
+  // #45 Phase 3 [D9] chat send-message adapter: record the user's chat turn as an input_submit
+  // transcript event so it surfaces in the conversation transcript immediately (the octogent-native
+  // form of the legacy "store user message" step). Append-only, guarded by an open transcript log —
+  // no effect on any existing PTY/session flow.
+  const recordInputSubmit = (terminalId: string, submitId: string, text: string): boolean => {
+    const session = sessions.get(terminalId);
+    if (!session) {
+      return false;
+    }
+
+    appendTranscriptEvent(session, terminalId, {
+      type: "input_submit",
+      submitId,
+      text,
+      timestamp: new Date().toISOString(),
+    });
+    return true;
+  };
+
   const resizeSession = (terminalId: string, cols: number, rows: number): boolean => {
     const session = sessions.get(terminalId);
     if (!session) {
@@ -742,6 +761,7 @@ export const createSessionRuntime = ({
     connectDirect,
     startSession,
     writeInput,
+    recordInputSubmit,
     resizeSession,
     close,
   };

@@ -3,6 +3,11 @@ import { join } from "node:path";
 import type { Duplex } from "node:stream";
 
 import type { TerminalSnapshot } from "@octogent/core";
+import {
+  SendMessageError,
+  buildConversationInputSubmit,
+  resolveSendMessageDisposition,
+} from "@octogent/core";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 
@@ -54,6 +59,17 @@ export { RuntimeInputError } from "./terminalRuntime/types";
 
 export const MAX_CHILDREN_PER_PARENT = 9;
 
+/**
+ * Result of submitting a chat turn into a conversation (#45 Phase 3 [D9] send-message adapter).
+ * Discriminated so the HTTP route maps each case to the legacy-parity status code without a
+ * try/catch: accepted → 202, busy → 409, no-session → 404, invalid-content → 400.
+ */
+export type SubmitConversationMessageResult =
+  | { status: "accepted"; submitId: string; tentacleId: string; text: string }
+  | { status: "busy"; tentacleId: string }
+  | { status: "no-session" }
+  | { status: "invalid-content"; error: string };
+
 export const createTerminalRuntime = ({
   workspaceCwd,
   projectStateDir,
@@ -63,6 +79,7 @@ export const createTerminalRuntime = ({
 }: CreateTerminalRuntimeOptions & { vaultRoot?: string | undefined }) => {
   const stateDir = projectStateDir ?? join(workspaceCwd, ".octogent");
   const sessions = new Map<string, TerminalSession>();
+  let conversationMessageCounter = 0;
   const websocketServer = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   const terminalEventsWebsocketServer = new WebSocketServer({
     noServer: true,
@@ -423,6 +440,59 @@ export const createTerminalRuntime = ({
 
     searchConversations(query: string) {
       return searchConversations(transcriptDirectoryPath, query);
+    },
+
+    // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's
+    // LIVE terminal session (tentacles ARE Claude Code sessions, [D8]) with parity to the legacy
+    // dashboard Chat's POST /:id/messages: content validation (400), the per-conversation
+    // processing lock (409), and the input-submit into the session. The assistant reply streams
+    // back through the already-native transcript surface (GET /api/conversations/:id) — Claude
+    // Code's Stop hook writes the turns; no claude-client.ts in the loop.
+    submitConversationMessage(
+      sessionId: string,
+      content: unknown,
+    ): SubmitConversationMessageResult {
+      const session = sessions.get(sessionId);
+      const disposition = resolveSendMessageDisposition({
+        present: Boolean(session),
+        runtimeState: session ? session.agentState : null,
+      });
+
+      if (!session || disposition === "no-session") {
+        return { status: "no-session" };
+      }
+      if (disposition === "busy") {
+        return { status: "busy", tentacleId: session.tentacleId };
+      }
+
+      // ready — validate the turn + build the exact bracketed-paste + CR PTY submit payload.
+      let submit: ReturnType<typeof buildConversationInputSubmit>;
+      try {
+        submit = buildConversationInputSubmit(content);
+      } catch (error) {
+        if (error instanceof SendMessageError) {
+          return { status: "invalid-content", error: error.message };
+        }
+        throw error;
+      }
+
+      conversationMessageCounter += 1;
+      const submitId = `${sessionId}:msg:${conversationMessageCounter}`;
+      // Record the user turn in the transcript first (legacy "store user message"), then submit it
+      // into the live session — writeInput flips the session to "processing", arming the B.14 lock
+      // against a concurrent send until Claude Code finishes the turn.
+      sessionRuntime.recordInputSubmit(sessionId, submitId, submit.text);
+      const delivered = sessionRuntime.writeInput(sessionId, submit.submitPayload);
+      if (!delivered) {
+        return { status: "no-session" };
+      }
+
+      return {
+        status: "accepted",
+        submitId,
+        tentacleId: session.tentacleId,
+        text: submit.text,
+      };
     },
 
     readUiState,

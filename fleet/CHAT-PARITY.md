@@ -24,7 +24,7 @@ Three dispositions. **native** = octogent already serves it (its existing read/l
 | Delete conversation | `DELETE /:id` | native | `DELETE /api/conversations/:id` (+ clear-all) |
 | Start a conversation | `POST /` | adapter | create a chat session bound to a tentacle terminal ([D8]) |
 | Rename / update metadata | `PUT /:id` | adapter | session-metadata rename over the transcript store (no LLM) |
-| **Send a message (the chat turn)** | `POST /:id/messages` | adapter | **KEYSTONE** — submit input to the tentacle session + surface the transcript reply, with the per-conversation processing lock |
+| **Send a message (the chat turn)** | `POST /:id/messages` | adapter ✓ **PROVEN** | **KEYSTONE (built Phase 3 m2)** — submit input to the tentacle session + surface the transcript reply, with the per-conversation processing lock. Now: `POST /api/conversations/:id/messages` → `runtime.submitConversationMessage` over the pure `sendMessage.ts` contract |
 | Generate a title | `POST /:id/generate-title` · `/:id/auto-title` | adapter | derive from `ConversationSessionSummary.firstUserTurnPreview` |
 | Summarize | `POST /:id/summarize` | adapter | octogent-native session summary over `ConversationSessionSummary` |
 | Attach a document | `POST /:id/upload` | adapter | write the upload into the tentacle's worktree workspace |
@@ -32,11 +32,11 @@ Three dispositions. **native** = octogent already serves it (its existing read/l
 | Suggested replies | `POST /:id/suggestions` | drop | engine-coupled reply nicety; retire with the engine |
 | Search documents from chat | `GET /documents/search` | drop | KB/RAG — served by the back-office KB tool seam (`BACKOFFICE-TOOLS.md` follow-up), not the chat surface |
 
-Current tally: **3 native · 6 adapter · 3 drop.**
+Current tally: **3 native · 6 adapter · 3 drop** — of the 6 adapters, **1 proven** (send-message, Phase 3 m2), 5 pending.
 
 ## The retire gate (D9 "no hard cut", machine-checkable)
 
-`summarizeChatParity().retireReady` is **true only when every non-drop capability is native or an adapter with `parityProven: true`.** Today it is **NO** — all 6 adapters are unproven — so the legacy dashboard Chat **must not be cut**. As each adapter lands + is verified in a later milestone, `markChatParityProven(id, matrix)` flips it; when `pendingAdapters` empties, the gate opens and (only then) `routes/conversations.ts` may be retired (Phase 4 excision aligns).
+`summarizeChatParity().retireReady` is **true only when every non-drop capability is native or an adapter with `parityProven: true`.** Today it is **NO** — the send-message keystone is proven (Phase 3 m2) but 5 adapters remain unproven — so the legacy dashboard Chat **must not be cut**. As each remaining adapter lands + is verified, its registry row flips to `parityProven: true` (and `markChatParityProven(id, matrix)` composes the same flip in tests); when `pendingAdapters` empties, the gate opens and (only then) `routes/conversations.ts` may be retired (Phase 4 excision aligns).
 
 ```bash
 # from $OCTOGENT (octogent repo root)
@@ -44,8 +44,15 @@ node bin/octogent chat-parity            # print the full matrix + native/adapte
 node bin/octogent chat-parity --summary  # { total, native, adapter, drop, pendingAdapters[], retireReady } as JSON
 ```
 
-## Cut-line (milestone 1 — deliberately not yet)
+## Milestone 2 — the send-message keystone (built)
 
-- **No chat built here.** This grounds the parity contract + gate. The interactive wiring (create-session / send-message / title / summary / rename / attach) lands as the adapter milestones in `apps/api`, each flipping its row via `markChatParityProven` and adding its own tests — `send-message` (the chat turn over the terminal-session runtime) is the keystone and sequenced first.
+The chat turn is now octogent-native and proven:
+- **Pure contract**: `packages/core/src/application/sendMessage.ts` — `buildConversationInputSubmit` (content validation → legacy 400; bracketed-paste + CR PTY payload matching `channelMessaging.ts`) + `resolveSendMessageDisposition` (the B.14 per-conversation processing lock: idle → ready, processing → busy/409, no live session → 404). No I/O. Tests: `packages/core/tests/sendMessage.test.ts`.
+- **Wiring**: `runtime.submitConversationMessage(sessionId, content)` (terminalRuntime.ts) resolves the lock from the live session's `agentState`, records the user turn as an `input_submit` transcript event (`sessionRuntime.recordInputSubmit`), then submits the payload via the proven `writeInput` PTY primitive (which flips the session to `processing`, arming the lock). Route: `POST /api/conversations/:id/messages` → 202 accepted / 409 busy / 404 no-session / 400 invalid-content. Tests: `apps/api/tests/conversationSendMessage.test.ts` (drives a real session over a mocked PTY).
+- **The reply is not synchronous**: unlike the legacy engine (`runClaude` → reply inline), the tentacle IS Claude Code ([D8]); the assistant reply streams into the transcript and is surfaced by the **already-native** `GET /api/conversations/:id`. So the route returns 202 (accepted), not the reply body — this is the architectural shape, not a parity gap.
+
+## Cut-line (remaining Phase 3 work — deliberately not yet)
+
+- **5 adapters still pending**: create-session / rename / title / summary / attach. Each lands next, flipping its registry row + adding its own tests.
 - **No `:3001` change.** The dashboard Chat stays live and untouched; its retirement is Phase 4 (engine excision) and is **gated on `retireReady === true`**, not on a date.
 - **Drops are not re-implemented.** `delegate` / `suggestions` / `documents-search` retire with the engine; they are excluded from the gate by design.
