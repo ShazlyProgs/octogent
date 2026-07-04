@@ -12,12 +12,23 @@
  * DELIBERATELY EXCLUDED: the legacy engine tools (execute / delegate / chat). Those are
  * being retired by #45; exposing them here would let the fleet call the very engine it
  * replaces (csuite-agent-init.md § Delegation model). Only the KEEP-list back-office
- * services (decision doc §3) appear — currently CRM (routes/crm.ts), Sara voice
+ * services (decision doc §3) appear — currently CRM (routes/crm.ts), the sales-funnel +
+ * email-cadence report (routes/stats.ts `GET /api/stats/funnel`), Sara voice
  * (routes/voice.ts), and the read-only CFO finance report (routes/cfo.ts). The WhatsApp
  * `/cfo` INBOUND bridge itself stays out (it is a signed WhatsApp webhook path, not a
  * fleet-callable REST route); the fleet consumes the SAME finance data through the new
  * read-only GET /api/cfo/report instead. The CollegaRAG KB (separate loopback MCP, not a
  * :3001 REST route) is a follow-up — see fleet/BACKOFFICE-TOOLS.md.
+ *
+ * EMAIL/CADENCE seam: the email subsystem (server/email/*, Resend-based) exposes NO
+ * dedicated authenticated fleet-callable REST route — its only HTTP surface is the PUBLIC
+ * waitlist signup + PUBLIC token unsubscribe + a SIGNED Resend inbound WEBHOOK (all
+ * external-recipient / webhook paths, excluded by the same rule as the WhatsApp inbound
+ * bridge). The ONLY authenticated route carrying the outbound email-cadence data is the
+ * CRM sales funnel (`GET /api/stats/funnel`: per-touch email_touch_1/2/4 dispatch counts,
+ * reply counts, the lead_followups cadence snapshot, and reply_rate) — surfaced here as
+ * the read-only `crm_funnel` tool. A DEDICATED email tool (on-demand send / dispatch-log
+ * read) is an honest gap needing a NEW :3001 route ([M]) — see fleet/BACKOFFICE-TOOLS.md.
  */
 
 export type BackOfficeService = "crm" | "voice" | "cfo";
@@ -205,6 +216,27 @@ const BACK_OFFICE_TOOLS: BackOfficeToolDefinition[] = [
       { name: "days", type: "number", description: "Days from now (default 7)" },
       { name: "duration_minutes", type: "number", description: "Duration (default 15)" },
       { name: "notes", type: "string", description: "Follow-up notes" },
+    ],
+  },
+  {
+    // The fleet's grounded, authenticated window into the outbound EMAIL cadence.
+    // Fronts routes/stats.ts GET /api/stats/funnel — the CRM sales funnel that also
+    // carries the Resend-based email-cadence metrics (there is no dedicated email route).
+    name: "crm_funnel",
+    service: "crm",
+    method: "GET",
+    pathTemplate: "/api/stats/funnel",
+    description:
+      "Sales-funnel + email-cadence report (read-only): lead counts by stage/source, per-touch EMAIL cadence dispatch counts (email_touch_1/2/4), reply counts, the lead_followups cadence snapshot (enrolled/paused/awaiting_first_touch/completed), stage conversion rates, reply_rate and booking_rate. This is the fleet's grounded window into the outbound (Resend-based) email cadence — the email subsystem has no dedicated REST route.",
+    mutates: false,
+    queryParams: [
+      {
+        name: "source",
+        type: "string",
+        description: "Filter by lead source ('ifat' matches any ifat-* source)",
+      },
+      { name: "days", type: "number", description: "Lookback window in days (default 30)" },
+      { name: "tenant_id", type: "string", description: "Scope to a tenant" },
     ],
   },
   // ---- Sara voice / receptionist (routes/voice.ts) -----------------------

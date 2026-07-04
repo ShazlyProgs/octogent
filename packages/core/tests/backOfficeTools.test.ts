@@ -29,6 +29,29 @@ describe("back-office tool registry", () => {
     for (const t of cfo) expect(t.mutates).toBe(false);
   });
 
+  it("exposes the read-only crm_funnel tool fronting GET /api/stats/funnel (email-cadence window)", () => {
+    const tool = findBackOfficeTool("crm_funnel");
+    expect(tool).toBeDefined();
+    expect(tool?.service).toBe("crm");
+    expect(tool?.method).toBe("GET");
+    expect(tool?.pathTemplate).toBe("/api/stats/funnel");
+    // The email-cadence window is observability only — it must never mutate.
+    expect(tool?.mutates).toBe(false);
+    // It must advertise the email cadence in its description (the fleet finds it by that).
+    expect(tool?.description.toLowerCase()).toContain("email");
+    expect(tool?.description.toLowerCase()).toContain("cadence");
+    // Filter-only GET: no required args.
+    const names = (tool?.queryParams ?? []).map((p) => p.name);
+    expect(names).toEqual(expect.arrayContaining(["source", "days", "tenant_id"]));
+  });
+
+  it("builds a crm_funnel request with the lookback + source query", () => {
+    const plan = buildBackOfficeRequest("crm_funnel", { source: "ifat", days: 14 });
+    expect(plan.path).toBe("/api/stats/funnel?source=ifat&days=14");
+    expect(plan.mutates).toBe(false);
+    expect(plan.body).toBeUndefined();
+  });
+
   it("has unique tool names and valid HTTP methods", () => {
     const tools = getBackOfficeToolDefinitions();
     const names = tools.map((t) => t.name);
