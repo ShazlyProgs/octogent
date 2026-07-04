@@ -9,20 +9,81 @@
  * persist the upload into the tentacle's workspace.
  *
  * This module is the framework-agnostic contract for the piece that must be validated + sanitized
- * BEFORE any write: the filename (path-traversal safe basename) + the text content + a size cap
- * (legacy 10 MB, text only — legacy also read the file as `.text()`). It performs NO I/O; the write
- * + the conversation linkage live in apps/api (`runtime.attachDocumentToConversation`).
+ * BEFORE any write: the filename (path-traversal safe basename + a text-only extension limit) +
+ * the text content + a size cap (legacy 10 MB, text only — legacy also read the file as `.text()`).
+ * It performs NO I/O; the write, the per-conversation document store, and the live-agent delivery
+ * live in apps/api (`runtime.attachDocumentToConversation`).
  *
- * ⚠️ Parity caveat (why the chat-parity row stays UNPROVEN): octogent has no per-conversation
- * document store. For the DEFAULT shared conversation the tentacle "workspace" is the whole repo
- * root, so an attachment lands in an ad-hoc `.octogent/attachments/<sessionId>/` subdir rather than
- * a managed store, and nothing DELIVERS the document into the live agent's context the way the
- * legacy message-append did. This contract + its runtime write are the REAL, honest groundwork;
- * the disposition flip waits on a genuine document store + ingestion path. See fleet/CHAT-PARITY.md.
+ * ✅ Parity closed (Phase 3 m8, MASTER-LIST r92): the two honest gaps the m7 groundwork flagged are
+ * now met. (a) A managed PER-CONVERSATION document store keyed by conversation identity under
+ * `.octogent/state/documents/<sessionId>/` (survives across turns, enumerable, path-traversal-safe)
+ * replaces the ad-hoc repo-root dump. (b) The upload is DELIVERED into the live agent's context via
+ * the proven send-message PTY primitive: `buildAttachmentDeliveryTurn` composes a user turn that
+ * references the stored absolute path, submitted so the tentacle (which IS Claude Code, [D8]) Reads
+ * it natively — the octogent-native form of the legacy message-append. See fleet/CHAT-PARITY.md.
  */
 
 /** Max attachment size — matches the legacy upload cap (10 MB, text only). */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Binary / non-text extensions rejected by the store. The store is text-only (legacy read every
+ * upload via `.text()`), and the tentacle consumes an attachment by `Read`-ing the stored file, so
+ * a binary blob would only ever surface as garbage text. Rejecting these up front is the honest
+ * "extension limit" — everything else (all text/code/data types, incl. extension-less files) is
+ * accepted, preserving the legacy upload's permissive text handling. Compared lowercase, no dot.
+ */
+export const ATTACHMENT_BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "bin",
+  "o",
+  "obj",
+  "a",
+  "lib",
+  "node",
+  "wasm",
+  "class",
+  "jar",
+  "war",
+  "zip",
+  "gz",
+  "tgz",
+  "tar",
+  "bz2",
+  "xz",
+  "7z",
+  "rar",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "ico",
+  "webp",
+  "tiff",
+  "mp3",
+  "mp4",
+  "avi",
+  "mov",
+  "wav",
+  "flac",
+  "mkv",
+  "webm",
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx",
+  "dmg",
+  "iso",
+  "img",
+  "pyc",
+]);
 
 export type AttachDocumentInput = {
   filename?: unknown;
@@ -66,12 +127,35 @@ export const sanitizeAttachmentFilename = (filename: unknown): string => {
   return cleaned;
 };
 
+/** Lowercase extension of a (already-sanitized) basename, or "" when it has none. */
+const extensionOf = (safeFilename: string): string => {
+  const dot = safeFilename.lastIndexOf(".");
+  // No dot, leading-dot dotfile (".env"), or trailing dot → treat as extension-less.
+  if (dot <= 0 || dot === safeFilename.length - 1) {
+    return "";
+  }
+  return safeFilename.slice(dot + 1).toLowerCase();
+};
+
 /**
- * Validate + normalize an attach-document request: sanitize the filename, require string content,
- * and enforce the size cap. Throws AttachDocumentError (parity with the legacy 400 / 413 shapes).
+ * Reject a blocked (binary / non-text) extension. Throws AttachDocumentError("unsupported file
+ * type"). Extension-less files pass (legacy treated unknown uploads as plain text).
+ */
+export const assertAllowedAttachmentExtension = (safeFilename: string): void => {
+  const ext = extensionOf(safeFilename);
+  if (ext.length > 0 && ATTACHMENT_BLOCKED_EXTENSIONS.has(ext)) {
+    throw new AttachDocumentError("unsupported file type");
+  }
+};
+
+/**
+ * Validate + normalize an attach-document request: sanitize the filename, enforce the text-only
+ * extension limit, require string content, and enforce the size cap. Throws AttachDocumentError
+ * (parity with the legacy 400 / 413 shapes).
  */
 export const buildDocumentAttachment = (input: AttachDocumentInput): NormalizedAttachment => {
   const safeFilename = sanitizeAttachmentFilename(input.filename);
+  assertAllowedAttachmentExtension(safeFilename);
 
   if (typeof input.content !== "string") {
     throw new AttachDocumentError("content is required");
@@ -84,3 +168,14 @@ export const buildDocumentAttachment = (input: AttachDocumentInput): NormalizedA
 
   return { safeFilename, content: input.content, byteLength };
 };
+
+/**
+ * Compose the user turn that DELIVERS a stored attachment into the live tentacle session. The
+ * tentacle IS Claude Code ([D8]) with native filesystem access, so parity with the legacy
+ * message-append is achieved not by inlining the content but by referencing the stored absolute
+ * path and instructing the agent to Read it. Pure — the runtime wraps this in the bracketed-paste
+ * PTY submit (via `buildConversationInputSubmit`) and hands it to the session.
+ */
+export const buildAttachmentDeliveryTurn = (filename: string, absolutePath: string): string =>
+  `A document "${filename}" was attached to this conversation. ` +
+  `Read it with your Read tool from this path when relevant:\n${absolutePath}`;

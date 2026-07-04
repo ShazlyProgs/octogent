@@ -172,12 +172,14 @@ const CHAT_PARITY: ChatParityCapability[] = [
     legacyRoute: "POST /:id/upload",
     disposition: "adapter",
     octogentParity:
-      "Write the upload into the tentacle's workspace (attachDocument.ts + runtime.attachDocumentToConversation). GROUNDWORK BUILT (Phase 3 m7) but NOT PROVEN: octogent has no per-conversation document store — a shared conversation's workspace is the repo root — and nothing delivers the document into the live agent's context the way the legacy message-append did. The disposition stays unproven pending a real document store + ingestion path.",
-    // NOT flipped — honesty-load-bearing D9 gate. The pure sanitize/size contract + the workspace
-    // write + the transcript link are real and tested, but full parity (a per-conversation document
-    // store the agent actually ingests) is not met, so parityProven stays false and retireReady
-    // stays NO. A false flip here would be the worst outcome. See fleet/CHAT-PARITY.md.
-    parityProven: false,
+      "Per-conversation document store + live-agent delivery (attachDocument.ts + runtime.attachDocumentToConversation). The upload is written into a managed per-conversation store under .octogent/state/documents/<sessionId>/ (survives across turns, enumerable, path-traversal-safe) and DELIVERED into the live agent via a reference turn (buildAttachmentDeliveryTurn) submitted over the proven send-message PTY primitive so the tentacle Reads it natively ([D8]); deferred to the next idle hook when the session is busy/not-live.",
+    // PROVEN — Phase 3 milestone 8 (MASTER-LIST r92): the two honest gaps m7 flagged are closed.
+    // (a) A per-conversation document store keyed by conversation identity replaces the ad-hoc
+    // repo-root dump; (b) the upload is delivered into the live agent's context via the proven PTY
+    // send-message primitive (a path-referencing turn the agent Reads), the octogent-native form of
+    // the legacy message-append. Tests drive the full loop (attach → store → live session receives
+    // the reference turn → simulated agent resolves the path). See fleet/CHAT-PARITY.md.
+    parityProven: true,
   },
   // ---- Dropped — retire with the engine, do NOT reimplement ---------------
   {

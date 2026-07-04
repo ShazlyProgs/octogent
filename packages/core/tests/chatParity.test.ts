@@ -75,6 +75,18 @@ describe("chat-parity registry (#45 Phase 3 [D9])", () => {
     expect(summary.pendingAdapters).not.toContain("send-message");
   });
 
+  it("marks attach-document PROVEN (Phase 3 m8) — store + live-agent delivery closes the last adapter", () => {
+    const attach = findChatParityCapability("attach-document");
+    expect(attach).toBeDefined();
+    expect(attach?.disposition).toBe("adapter");
+    expect(attach?.parityProven).toBe(true);
+    expect(attach?.legacyRoute).toBe("POST /:id/upload");
+    // With attach-document proven, no adapters remain pending and the D9 retire gate opens.
+    const summary = summarizeChatParity();
+    expect(summary.pendingAdapters).toEqual([]);
+    expect(summary.retireReady).toBe(true);
+  });
+
   it("becomes retire-ready only once every adapter is proven (drops are excluded from the gate)", () => {
     const adapterIds = getChatParityCapabilities()
       .filter((c) => c.disposition === "adapter")

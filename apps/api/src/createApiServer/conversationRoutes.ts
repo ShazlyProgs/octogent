@@ -219,11 +219,12 @@ export const handleConversationSummarizeRoute: ApiRouteHandler = async (
   return true;
 };
 
-// #45 Phase 3 [D9] — attach-document adapter (REAL groundwork; the chat-parity row stays UNPROVEN
-// pending a per-conversation document store — see fleet/CHAT-PARITY.md). Parity with the legacy
-// POST /:id/upload: persist an uploaded text document into the tentacle's workspace. Accepts JSON
-// { filename, content } (a simplification of the legacy multipart form — octogent's request layer
-// is JSON-only). Returns 201 attached / 400 invalid / 404 no-conversation.
+// #45 Phase 3 [D9] — attach-document adapter (PROVEN Phase 3 m8 — per-conversation document store +
+// live-agent delivery; see fleet/CHAT-PARITY.md). Parity with the legacy POST /:id/upload: persist
+// an uploaded text document into the conversation's document store and deliver a reference turn into
+// the live agent. Accepts JSON { filename, content } (a simplification of the legacy multipart form
+// — octogent's request layer is JSON-only). POST → 201 attached / 400 invalid / 404 no-conversation.
+// GET → 200 { sessionId, documents } enumerates the conversation's stored documents.
 export const handleConversationDocumentsRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
   { runtime },
@@ -231,6 +232,14 @@ export const handleConversationDocumentsRoute: ApiRouteHandler = async (
   const match = requestUrl.pathname.match(CONVERSATION_DOCUMENTS_PATH_PATTERN);
   if (!match) {
     return false;
+  }
+
+  const sessionId = decodeURIComponent(match[1] ?? "");
+
+  if (request.method === "GET") {
+    const documents = runtime.listConversationDocuments(sessionId);
+    writeJson(response, 200, { sessionId, documents }, corsOrigin);
+    return true;
   }
 
   if (request.method !== "POST") {
@@ -243,7 +252,6 @@ export const handleConversationDocumentsRoute: ApiRouteHandler = async (
     return true;
   }
 
-  const sessionId = decodeURIComponent(match[1] ?? "");
   const result = runtime.attachDocumentToConversation(sessionId, bodyReadResult.payload);
 
   if (result.status === "invalid") {
@@ -264,6 +272,7 @@ export const handleConversationDocumentsRoute: ApiRouteHandler = async (
       filename: result.filename,
       path: result.path,
       byteLength: result.byteLength,
+      delivery: result.delivery,
     },
     corsOrigin,
   );

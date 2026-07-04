@@ -18,6 +18,8 @@ vi.mock("../src/terminalRuntime/ptyEnvironment", () => ({
   ensureNodePtySpawnHelperExecutable: ensureSpawnHelperMock,
 }));
 
+import { buildAttachmentDeliveryTurn, buildConversationInputSubmit } from "@octogent/core";
+
 import { createTerminalRuntime } from "../src/terminalRuntime";
 import type { GitClient } from "../src/terminalRuntime";
 
@@ -45,18 +47,27 @@ const noopGitClient = (): GitClient =>
 
 type Runtime = ReturnType<typeof createTerminalRuntime>;
 
-describe("attach-document adapter — runtime.attachDocumentToConversation (#45 Phase 3 [D9] m7)", () => {
+// The exact bracketed-paste + CR PTY payload the runtime submits to DELIVER an attachment reference
+// into the live session — reconstructed from the same pure core contract the runtime uses.
+const expectedDeliveryPayload = (filename: string, absolutePath: string): string =>
+  buildConversationInputSubmit(buildAttachmentDeliveryTurn(filename, absolutePath)).submitPayload;
+
+describe("attach-document adapter — runtime.attachDocumentToConversation (#45 Phase 3 [D9] m8)", () => {
   const temporaryDirectories: string[] = [];
   const runtimes: Runtime[] = [];
 
+  // A runtime with a LIVE, idle Claude Code session bound to a chat conversation. The mocked PTY is
+  // returned to the caller so a test can assert what the runtime submits into the live agent.
   const startLiveConversation = (): {
     runtime: Runtime;
+    pty: FakePty;
     workspaceCwd: string;
     sessionId: string;
   } => {
     const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-attach-document-test-"));
     temporaryDirectories.push(workspaceCwd);
-    spawnMock.mockReturnValue(new FakePty());
+    const pty = new FakePty();
+    spawnMock.mockReturnValue(pty);
 
     const runtime = createTerminalRuntime({ workspaceCwd, gitClient: noopGitClient() });
     runtimes.push(runtime);
@@ -64,11 +75,13 @@ describe("attach-document adapter — runtime.attachDocumentToConversation (#45 
     if (created.status !== "created") {
       throw new Error("failed to create conversation");
     }
-    return { runtime, workspaceCwd, sessionId: created.sessionId };
+    return { runtime, pty, workspaceCwd, sessionId: created.sessionId };
   };
 
-  const attachmentsPath = (workspaceCwd: string, sessionId: string, filename: string) =>
-    join(workspaceCwd, ".octogent", "attachments", encodeURIComponent(sessionId), filename);
+  // The managed per-conversation document store path — under the project STATE dir, keyed by the
+  // conversation identity (NOT the tentacle workspace / repo root).
+  const storePath = (workspaceCwd: string, sessionId: string, filename: string) =>
+    join(workspaceCwd, ".octogent", "state", "documents", encodeURIComponent(sessionId), filename);
 
   beforeEach(() => {
     createShellEnvironmentMock.mockClear();
@@ -91,26 +104,45 @@ describe("attach-document adapter — runtime.attachDocumentToConversation (#45 
     temporaryDirectories.length = 0;
   });
 
-  it("writes the uploaded document into the tentacle's workspace attachments dir", () => {
-    const { runtime, workspaceCwd, sessionId } = startLiveConversation();
+  it("proves the full loop: attach → per-conversation store → live session receives the reference turn → the path resolves", () => {
+    const { runtime, pty, workspaceCwd, sessionId } = startLiveConversation();
 
+    const content = "# Launch plan\n\nShip it.";
     const result = runtime.attachDocumentToConversation(sessionId, {
       filename: "launch-notes.md",
-      content: "# Launch plan\n\nShip it.",
+      content,
     });
 
     expect(result.status).toBe("attached");
     if (result.status !== "attached") {
       throw new Error("expected attached");
     }
-    expect(result.filename).toBe("launch-notes.md");
+    // (1) stored in the per-conversation document store (managed, keyed, under the state dir).
+    const expectedAbsolute = storePath(workspaceCwd, sessionId, "launch-notes.md");
+    expect(result.absolutePath).toBe(expectedAbsolute);
+    expect(result.path).toBe(
+      join(".octogent", "state", "documents", encodeURIComponent(sessionId), "launch-notes.md"),
+    );
+    expect(existsSync(result.absolutePath)).toBe(true);
 
-    const onDisk = attachmentsPath(workspaceCwd, sessionId, "launch-notes.md");
-    expect(existsSync(onDisk)).toBe(true);
-    expect(readFileSync(onDisk, "utf8")).toBe("# Launch plan\n\nShip it.");
+    // (2) the live session RECEIVED the reference turn — the exact proven send-message PTY payload,
+    // referencing the stored absolute path so the tentacle (which IS Claude Code, [D8]) Reads it.
+    expect(result.delivery).toBe("delivered");
+    expect(pty.write).toHaveBeenCalledWith(
+      expectedDeliveryPayload("launch-notes.md", result.absolutePath),
+    );
+
+    // (3) the (simulated) agent resolves the path it was handed and gets the document content back.
+    const deliveredWrite = pty.write.mock.calls
+      .map((call) => call[0] as string)
+      .find((data) => data.includes(result.absolutePath));
+    expect(deliveredWrite).toBeDefined();
+    const pathTheAgentSees = result.absolutePath;
+    expect(deliveredWrite).toContain(pathTheAgentSees);
+    expect(readFileSync(pathTheAgentSees, "utf8")).toBe(content);
   });
 
-  it("sanitizes a traversal filename to a basename that stays inside the attachments dir", () => {
+  it("keys the store by conversation identity and keeps a traversal filename inside it (path-traversal-safe)", () => {
     const { runtime, workspaceCwd, sessionId } = startLiveConversation();
 
     const result = runtime.attachDocumentToConversation(sessionId, {
@@ -119,42 +151,53 @@ describe("attach-document adapter — runtime.attachDocumentToConversation (#45 
     });
 
     expect(result.status).toBe("attached");
-    if (result.status === "attached") {
-      expect(result.filename).toBe("passwd");
+    if (result.status !== "attached") {
+      throw new Error("expected attached");
     }
-    // The file lands inside the conversation's attachments dir, not at an escaped path.
-    expect(existsSync(attachmentsPath(workspaceCwd, sessionId, "passwd"))).toBe(true);
+    expect(result.filename).toBe("passwd");
+    // Lands inside THIS conversation's store dir, not at an escaped path.
+    expect(result.absolutePath).toBe(storePath(workspaceCwd, sessionId, "passwd"));
+    expect(result.absolutePath).toContain(encodeURIComponent(sessionId));
+    expect(existsSync(storePath(workspaceCwd, sessionId, "passwd"))).toBe(true);
   });
 
-  it("surfaces the attachment in the conversation transcript (best-effort link)", async () => {
-    const { runtime, workspaceCwd, sessionId } = startLiveConversation();
+  it("enumerates the conversation's document store (survives across turns, listable)", () => {
+    const { runtime, sessionId } = startLiveConversation();
 
-    runtime.attachDocumentToConversation(sessionId, { filename: "notes.md", content: "hi" });
+    expect(runtime.listConversationDocuments(sessionId)).toEqual([]);
+    runtime.attachDocumentToConversation(sessionId, { filename: "b-notes.md", content: "b" });
+    runtime.attachDocumentToConversation(sessionId, { filename: "a-notes.md", content: "a" });
 
-    await runtime.close();
-    runtimes.length = 0; // already closed — don't double-close in afterEach.
-
-    const transcriptPath = join(
-      workspaceCwd,
-      ".octogent",
-      "state",
-      "transcripts",
-      `${encodeURIComponent(sessionId)}.jsonl`,
-    );
-    for (let attempt = 0; attempt < 20 && !existsSync(transcriptPath); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    const events = readFileSync(transcriptPath, "utf8")
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => JSON.parse(line) as { type: string; text?: string });
-    const attachEvent = events.find(
-      (event) => event.type === "input_submit" && event.text === "[Attached document: notes.md]",
-    );
-    expect(attachEvent).toBeDefined();
+    // Both survive and are enumerable (sorted).
+    expect(runtime.listConversationDocuments(sessionId)).toEqual(["a-notes.md", "b-notes.md"]);
   });
 
-  it("rejects an invalid attachment (missing content / bad filename) with legacy-shape errors", () => {
+  it("defers delivery when the session is busy, then delivers on the next idle hook (deliver-on-next-ready)", () => {
+    const { runtime, pty, workspaceCwd, sessionId } = startLiveConversation();
+
+    // Put the session under the processing lock (a chat turn in flight).
+    expect(runtime.submitConversationMessage(sessionId, "do some work").status).toBe("accepted");
+
+    const result = runtime.attachDocumentToConversation(sessionId, {
+      filename: "context.md",
+      content: "reference me later",
+    });
+    expect(result.status).toBe("attached");
+    if (result.status !== "attached") {
+      throw new Error("expected attached");
+    }
+    // Stored immediately, but NOT delivered while the agent is mid-turn.
+    expect(result.delivery).toBe("deferred");
+    expect(existsSync(storePath(workspaceCwd, sessionId, "context.md"))).toBe(true);
+    const deliveryPayload = expectedDeliveryPayload("context.md", result.absolutePath);
+    expect(pty.write).not.toHaveBeenCalledWith(deliveryPayload);
+
+    // The agent goes idle → the idle hook flushes the pending reference into the live session.
+    runtime.handleHook("notification", { notification_type: "idle_prompt" }, sessionId);
+    expect(pty.write).toHaveBeenCalledWith(deliveryPayload);
+  });
+
+  it("rejects an invalid attachment (missing content / bad filename / binary type) with legacy-shape errors", () => {
     const { runtime, sessionId } = startLiveConversation();
 
     const noContent = runtime.attachDocumentToConversation(sessionId, { filename: "notes.md" });
@@ -163,11 +206,18 @@ describe("attach-document adapter — runtime.attachDocumentToConversation (#45 
       expect(noContent.error).toBe("content is required");
     }
 
-    const badName = runtime.attachDocumentToConversation(sessionId, {
-      filename: "..",
+    expect(
+      runtime.attachDocumentToConversation(sessionId, { filename: "..", content: "x" }).status,
+    ).toBe("invalid");
+
+    const binary = runtime.attachDocumentToConversation(sessionId, {
+      filename: "photo.png",
       content: "x",
     });
-    expect(badName.status).toBe("invalid");
+    expect(binary.status).toBe("invalid");
+    if (binary.status === "invalid") {
+      expect(binary.error).toBe("unsupported file type");
+    }
   });
 
   it("returns no-conversation for an unknown session (legacy 404)", () => {

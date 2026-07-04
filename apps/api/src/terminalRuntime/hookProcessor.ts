@@ -64,6 +64,8 @@ export const createHookProcessor = (deps: {
   getApiBaseUrl: () => string;
   persistRegistry: () => void;
   deliverChannelMessages: (terminalId: string) => void;
+  /** Flush any queued attach-document reference turns for this session (deliver-on-next-ready). */
+  deliverPendingAttachments: (terminalId: string) => void;
   onStateChange?: (
     terminalId: string,
     state: TerminalSession["agentState"],
@@ -78,6 +80,7 @@ export const createHookProcessor = (deps: {
     getApiBaseUrl,
     persistRegistry,
     deliverChannelMessages,
+    deliverPendingAttachments,
     onStateChange,
     vaultRoot,
   } = deps;
@@ -316,8 +319,9 @@ export const createHookProcessor = (deps: {
         onStateChange?.(octogentSessionId, "idle");
         broadcastMessage(session, { type: "state", state: "idle" });
 
-        // Deliver any queued channel messages now that the agent is idle.
+        // Deliver any queued channel messages + attachment references now that the agent is idle.
         deliverChannelMessages(octogentSessionId);
+        deliverPendingAttachments(octogentSessionId);
       }
 
       return { ok: true };
@@ -464,9 +468,10 @@ export const createHookProcessor = (deps: {
       logVerbose(`[Hook] Stored ${turns.length} turns for session ${matchedSessionId}.`);
     }
 
-    // Deliver any queued channel messages now that the agent is idle.
+    // Deliver any queued channel messages + attachment references now that the agent is idle.
     if (matchedSessionId) {
       deliverChannelMessages(matchedSessionId);
+      deliverPendingAttachments(matchedSessionId);
     }
 
     return { ok: true };

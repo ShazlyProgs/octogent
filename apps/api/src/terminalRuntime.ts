@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -9,6 +9,7 @@ import {
   ConversationRenameError,
   CreateConversationError,
   SendMessageError,
+  buildAttachmentDeliveryTurn,
   buildConversationInputSubmit,
   buildConversationRename,
   buildConversationSummaryText,
@@ -127,17 +128,22 @@ export type SummarizeConversationResult =
 /**
  * Result of attaching a document to a conversation (#45 Phase 3 [D9] attach-document adapter).
  * Discriminated so the HTTP route maps each case: attached → 201, invalid → 400, no-conversation
- * → 404. NOTE: this is the REAL groundwork (write into the tentacle workspace + transcript link) —
- * the chat-parity row stays UNPROVEN pending a per-conversation document store + agent-ingestion
- * path; see application/attachDocument.ts + fleet/CHAT-PARITY.md.
+ * → 404. The document is written into the per-conversation document store and DELIVERED into the
+ * live agent context (`delivery: "delivered"`) or queued for the next ready turn (`"deferred"`
+ * when the session is busy or not live). See application/attachDocument.ts + fleet/CHAT-PARITY.md.
  */
 export type AttachDocumentResult =
   | {
       status: "attached";
       sessionId: string;
       filename: string;
+      /** Store-relative path (under the project state dir) for display/logging. */
       path: string;
+      /** Absolute path the tentacle Reads — the path referenced in the delivered turn. */
+      absolutePath: string;
       byteLength: number;
+      /** "delivered" = injected into the live session now; "deferred" = queued for next ready. */
+      delivery: "delivered" | "deferred";
     }
   | { status: "invalid"; error: string }
   | { status: "no-conversation" };
@@ -232,6 +238,68 @@ export const createTerminalRuntime = ({
     writeInput: (terminalId: string, data: string) => sessionRuntime.writeInput(terminalId, data),
   });
 
+  // #45 Phase 3 [D9] chat attach-document — the per-conversation document store + live-agent
+  // delivery. The store lives under the project state dir (NOT the tentacle workspace / repo root):
+  // one dir per conversation identity, so uploads survive across turns, are enumerable, and are
+  // path-traversal-safe (sessionId encoded, filename sanitized by the pure contract). Delivery
+  // injects a reference turn into the live session over the PROVEN send-message PTY primitive; when
+  // the session is busy or not live, the reference is queued and flushed on the next idle hook —
+  // the SAME deliver-on-ready seam channel messages use (the octogent-native "deliver on next turn").
+  const conversationDocumentsRoot = join(stateDir, "state", "documents");
+  const pendingAttachmentDeliveries = new Map<
+    string,
+    Array<{ filename: string; absolutePath: string }>
+  >();
+
+  const conversationDocumentStoreDir = (sessionId: string): string =>
+    join(conversationDocumentsRoot, encodeURIComponent(sessionId));
+
+  // Submit one reference turn covering all supplied documents into the live session, over the exact
+  // bracketed-paste + CR PTY payload the send-message keystone uses (composed once, mirroring
+  // channelMessaging so multi-doc delivery lands atomically). Returns whether the write happened.
+  const deliverAttachmentReferenceTurns = (
+    sessionId: string,
+    items: Array<{ filename: string; absolutePath: string }>,
+  ): boolean => {
+    if (items.length === 0) {
+      return false;
+    }
+    const turnText = items
+      .map((item) => buildAttachmentDeliveryTurn(item.filename, item.absolutePath))
+      .join("\n\n");
+    const submit = buildConversationInputSubmit(turnText);
+    conversationMessageCounter += 1;
+    sessionRuntime.recordInputSubmit(
+      sessionId,
+      `${sessionId}:attach:${conversationMessageCounter}`,
+      submit.text,
+    );
+    return sessionRuntime.writeInput(sessionId, submit.submitPayload);
+  };
+
+  // Flush any queued attachment references into the session iff it is live + ready (idle). Called
+  // from the idle/stop hooks (wired below) — the octogent-native deliver-on-next-ready path.
+  const flushPendingAttachmentDeliveries = (sessionId: string): number => {
+    const pending = pendingAttachmentDeliveries.get(sessionId);
+    if (!pending || pending.length === 0) {
+      return 0;
+    }
+    const session = sessions.get(sessionId);
+    const disposition = resolveSendMessageDisposition({
+      present: Boolean(session),
+      runtimeState: session ? session.agentState : null,
+    });
+    if (disposition !== "ready") {
+      return 0;
+    }
+    const delivered = deliverAttachmentReferenceTurns(sessionId, pending);
+    if (delivered) {
+      pendingAttachmentDeliveries.delete(sessionId);
+      return pending.length;
+    }
+    return 0;
+  };
+
   const hookProcessor = createHookProcessor({
     terminals,
     sessions,
@@ -239,6 +307,7 @@ export const createTerminalRuntime = ({
     getApiBaseUrl,
     persistRegistry,
     deliverChannelMessages: channelMessaging.deliverChannelMessages,
+    deliverPendingAttachments: flushPendingAttachmentDeliveries,
     onStateChange: broadcastTerminalStateChanged,
     ...(vaultRoot ? { vaultRoot } : {}),
   });
@@ -624,16 +693,18 @@ export const createTerminalRuntime = ({
       return { status: "summarized", sessionId, summary };
     },
 
-    // #45 Phase 3 [D9] chat attach-document adapter — the REAL groundwork (NOT flipped to proven).
-    // The octogent-native form of the legacy dashboard Chat's `POST /:id/upload`: persist the
-    // upload into the tentacle's workspace (per the D9 parity note) under a conversation-scoped
-    // attachments dir, and surface a transcript note when a live session exists. Validated by the
-    // pure buildDocumentAttachment contract (filename sanitize + size cap).
-    //
-    // Honest gap (why chat-parity stays UNPROVEN): octogent has no per-conversation document store
-    // — for a shared conversation the "workspace" is the whole repo root, so this writes to an
-    // ad-hoc `.octogent/attachments/<sessionId>/` subdir — and nothing DELIVERS the document into
-    // the live agent's context the way the legacy message-append did. See fleet/CHAT-PARITY.md.
+    // #45 Phase 3 [D9] chat attach-document adapter (PROVEN — Phase 3 m8, MASTER-LIST r92). The
+    // octogent-native form of the legacy dashboard Chat's `POST /:id/upload`. Two halves:
+    //  1. STORE — write the validated upload into the PER-CONVERSATION document store under the
+    //     project state dir (`.octogent/state/documents/<sessionId>/`), NOT the tentacle workspace /
+    //     repo root. Keyed by conversation identity, so uploads survive across turns + restarts, are
+    //     enumerable (listConversationDocuments), and are path-traversal-safe (sessionId encoded +
+    //     the pure sanitize/size/extension contract).
+    //  2. DELIVER — feed the document into the live agent's context the way the legacy message-append
+    //     did: submit a reference turn (referencing the stored ABSOLUTE path) into the live session
+    //     over the PROVEN send-message PTY primitive, so the tentacle (which IS Claude Code, [D8])
+    //     Reads it natively. If the session is busy or not live, the reference is queued and flushed
+    //     on the next idle hook (deliver-on-next-ready). See fleet/CHAT-PARITY.md.
     attachDocumentToConversation(sessionId: string, input: unknown): AttachDocumentResult {
       let normalized: ReturnType<typeof buildDocumentAttachment>;
       try {
@@ -652,35 +723,37 @@ export const createTerminalRuntime = ({
         return { status: "no-conversation" };
       }
 
-      // Resolve the tentacle's workspace (shared → repo root; worktree → the worktree dir). If no
-      // terminal record backs the identifier, getTentacleWorkspaceCwd throws — fall back to the
-      // project workspace root.
-      let cwd = workspaceCwd;
-      const resolved = resolveTerminalSession(sessionId);
-      if (resolved) {
-        try {
-          cwd = worktreeManager.getTentacleWorkspaceCwd(resolved.tentacleId);
-        } catch {
-          cwd = workspaceCwd;
-        }
-      }
+      // 1. STORE — managed, per-conversation, under the project state dir (survives across turns).
+      const storeDir = conversationDocumentStoreDir(sessionId);
+      mkdirSync(storeDir, { recursive: true });
+      const absolutePath = join(storeDir, normalized.safeFilename);
+      writeFileSync(absolutePath, normalized.content, "utf8");
+      const relativePath = join(
+        ".octogent",
+        "state",
+        "documents",
+        encodeURIComponent(sessionId),
+        normalized.safeFilename,
+      );
 
-      const relativeDir = join(".octogent", "attachments", encodeURIComponent(sessionId));
-      const absoluteDir = join(cwd, relativeDir);
-      mkdirSync(absoluteDir, { recursive: true });
-      writeFileSync(join(absoluteDir, normalized.safeFilename), normalized.content, "utf8");
-      const relativePath = join(relativeDir, normalized.safeFilename);
-
-      // Best-effort conversation linkage: record the attachment in the transcript when a live
-      // session exists. This surfaces it in the conversation events (not as a turn — turn counts
-      // come from Claude Code's Stop hook) but does NOT feed the content to the live agent.
-      if (sessions.has(sessionId)) {
-        conversationMessageCounter += 1;
-        sessionRuntime.recordInputSubmit(
-          sessionId,
-          `${sessionId}:attach:${conversationMessageCounter}`,
-          `[Attached document: ${normalized.safeFilename}]`,
-        );
+      // 2. DELIVER — inject the reference turn into the live session if it is ready right now;
+      // otherwise queue it for the next idle hook (the octogent-native "deliver on next turn").
+      const session = sessions.get(sessionId);
+      const disposition = resolveSendMessageDisposition({
+        present: Boolean(session),
+        runtimeState: session ? session.agentState : null,
+      });
+      let delivery: "delivered" | "deferred";
+      if (disposition === "ready") {
+        deliverAttachmentReferenceTurns(sessionId, [
+          { filename: normalized.safeFilename, absolutePath },
+        ]);
+        delivery = "delivered";
+      } else {
+        const queue = pendingAttachmentDeliveries.get(sessionId) ?? [];
+        queue.push({ filename: normalized.safeFilename, absolutePath });
+        pendingAttachmentDeliveries.set(sessionId, queue);
+        delivery = "deferred";
       }
 
       return {
@@ -688,8 +761,28 @@ export const createTerminalRuntime = ({
         sessionId,
         filename: normalized.safeFilename,
         path: relativePath,
+        absolutePath,
         byteLength: normalized.byteLength,
+        delivery,
       };
+    },
+
+    // #45 Phase 3 [D9] chat attach-document — enumerate a conversation's document store (the
+    // "enumerable" half of the per-conversation store). Returns the stored filenames (sorted), or
+    // an empty list when nothing has been attached yet.
+    listConversationDocuments(sessionId: string): string[] {
+      const storeDir = conversationDocumentStoreDir(sessionId);
+      if (!existsSync(storeDir)) {
+        return [];
+      }
+      return readdirSync(storeDir).sort();
+    },
+
+    // #45 Phase 3 [D9] chat attach-document — deliver-on-next-ready hook. Exposed for the idle/stop
+    // hook seam (wired in createHookProcessor) so deferred attachment references reach the agent
+    // once the session is idle. Returns the number of deferred docs delivered.
+    flushPendingAttachmentDeliveries(sessionId: string): number {
+      return flushPendingAttachmentDeliveries(sessionId);
     },
 
     // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's
