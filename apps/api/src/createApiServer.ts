@@ -34,6 +34,7 @@ export const createApiServer = ({
   monitorService,
   invalidateClaudeUsageCache = invalidateUsageCacheDefault,
   allowRemoteAccess = false,
+  apiToken,
   vaultRoot,
 }: CreateApiServerOptions & { vaultRoot?: string | undefined } = {}) => {
   const resolvedWorkspaceCwd = workspaceCwd ?? process.cwd();
@@ -135,6 +136,7 @@ export const createApiServer = ({
     invalidateClaudeUsageCache,
     codeIntelStore,
     allowRemoteAccess,
+    apiToken,
   });
 
   const server = createServer(requestHandler);

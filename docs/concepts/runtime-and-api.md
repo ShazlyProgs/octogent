@@ -37,6 +37,11 @@ flowchart TD
 - binds to `127.0.0.1` by default
 - enforces loopback `Host` and `Origin` checks by default
 - remote access must be enabled explicitly with `OCTOGENT_ALLOW_REMOTE_ACCESS=1`
+- optional token auth (OCT-01): set `OCTOGENT_API_TOKEN` to require a
+  `Authorization: Bearer` / `X-Api-Key` token on mutating requests
+  (`POST`/`PUT`/`PATCH`/`DELETE`); reads and `OPTIONS` preflight stay open. Unset
+  preserves the loopback-open default. See [API reference](../reference/api.md#authentication-oct-01)
+  and `docs/HARDENING.md`.
 
 ## Persistence model
 

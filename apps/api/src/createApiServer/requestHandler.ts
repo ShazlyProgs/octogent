@@ -55,6 +55,7 @@ import {
   getRequestCorsOrigin,
   isAllowedHostHeader,
   isAllowedOriginHeader,
+  isAuthorizedRequest,
   readHeaderValue,
 } from "./security";
 import {
@@ -102,6 +103,7 @@ type CreateApiRequestHandlerOptions = {
   invalidateClaudeUsageCache: () => void;
   codeIntelStore: CodeIntelStore;
   allowRemoteAccess: boolean;
+  apiToken?: string | undefined;
 };
 
 const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
@@ -205,6 +207,7 @@ export const createApiRequestHandler = ({
   invalidateClaudeUsageCache,
   codeIntelStore,
   allowRemoteAccess,
+  apiToken,
 }: CreateApiRequestHandlerOptions) => {
   const resolvedWebDistDir = webDistDir && existsSync(webDistDir) ? webDistDir : null;
 
@@ -249,6 +252,20 @@ export const createApiRequestHandler = ({
     if (!isAllowedOriginHeader(originHeader, allowRemoteAccess)) {
       writeJson(response, 403, { error: "Origin not allowed." }, null);
       logRequest(request.method ?? "?", request.url ?? "/", 403, startTime);
+      return;
+    }
+
+    // OCT-01: token gate for mutating requests (no-op when apiToken is unset).
+    if (
+      !isAuthorizedRequest({
+        method: request.method,
+        authorizationHeader: readHeaderValue(request.headers.authorization),
+        apiKeyHeader: readHeaderValue(request.headers["x-api-key"]),
+        apiToken,
+      })
+    ) {
+      writeJson(response, 401, { error: "Unauthorized." }, corsOrigin);
+      logRequest(request.method ?? "?", request.url ?? "/", 401, startTime);
       return;
     }
 
