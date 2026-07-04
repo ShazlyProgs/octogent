@@ -2,6 +2,38 @@
 
 Octogent exposes a local HTTP and WebSocket API.
 
+## Authentication (OCT-01)
+
+By default the API is **loopback-open**: it binds to `127.0.0.1` and enforces
+loopback `Host`/`Origin` checks, but does not require a credential. This is the
+mode the local dashboard and the tentacle fleet rely on.
+
+Set `OCTOGENT_API_TOKEN` to require a token on **mutating** requests
+(`POST`/`PUT`/`PATCH`/`DELETE`). Read-only `GET`/`HEAD` requests and CORS
+`OPTIONS` preflight stay open so the dashboard keeps polling telemetry. Present
+the token on mutating calls with either header:
+
+```bash
+# Bearer
+curl -X POST http://127.0.0.1:8787/api/terminals \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OCTOGENT_API_TOKEN" \
+  -d '{"name":"reviewer"}'
+
+# or X-Api-Key
+curl -X POST http://127.0.0.1:8787/api/terminals \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $OCTOGENT_API_TOKEN" \
+  -d '{"name":"reviewer"}'
+```
+
+A missing or wrong token on a mutating request returns `401 {"error":"Unauthorized."}`.
+Unset (or empty/whitespace) `OCTOGENT_API_TOKEN` preserves the current
+loopback-open behaviour. The `octogent` CLI reads `OCTOGENT_API_TOKEN` and adds
+the header automatically. **Activation is deployment-gated** — the daemon must be
+(re)started with the env var set. See `docs/HARDENING.md` (OCT-01) for scope and
+residuals (WebSocket-upgrade and GET-read gating are intentionally out of scope).
+
 ## Terminals
 
 - `GET /api/terminal-snapshots` - returns the current terminal list and snapshot state for the UI

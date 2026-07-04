@@ -19,6 +19,7 @@ import {
   executeBackOfficeTool,
   resolveBackOfficeConfigFromEnv,
 } from "./backOfficeClient";
+import { readApiToken } from "./createApiServer/security";
 import {
   ensureOctogentGitignoreEntry,
   ensureProjectScaffold,
@@ -191,6 +192,13 @@ const apiError = () => {
   process.exit(1);
 };
 
+// OCT-01: when OCTOGENT_API_TOKEN is set, the CLI must present it on mutating
+// requests (the API gates POST/PUT/PATCH/DELETE). Unset → no header, unchanged.
+const apiAuthHeaders = (): Record<string, string> => {
+  const token = readApiToken(process.env.OCTOGENT_API_TOKEN);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const maybeOpenBrowser = (url: string) => {
   if (process.env.OCTOGENT_NO_OPEN === "1" || process.env.CI === "1") {
     return;
@@ -247,6 +255,8 @@ const startServer = async () => {
     promptsDir,
     webDistDir: existsSync(webDistDir) ? webDistDir : undefined,
     allowRemoteAccess: process.env.OCTOGENT_ALLOW_REMOTE_ACCESS === "1",
+    // OCT-01: optional token gate for mutating endpoints (unset = loopback-open).
+    apiToken: readApiToken(process.env.OCTOGENT_API_TOKEN),
     ...(vaultRoot ? { vaultRoot } : {}),
   });
 
@@ -509,7 +519,7 @@ const tentacleCreate = async () => {
   try {
     const response = await fetch(`${apiBase}/api/deck/tentacles`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...apiAuthHeaders() },
       body: JSON.stringify({ name, description, color, octopus }),
     });
     const data = (await response.json()) as Record<string, unknown>;
@@ -580,7 +590,7 @@ const terminalCreate = async () => {
   try {
     const response = await fetch(`${apiBase}/api/terminals`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...apiAuthHeaders() },
       body: JSON.stringify(body),
     });
     const data = (await response.json()) as Record<string, unknown>;
@@ -630,7 +640,7 @@ const channelSend = async () => {
       `${apiBase}/api/channels/${encodeURIComponent(terminalId)}/messages`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...apiAuthHeaders() },
         body: JSON.stringify({ fromTerminalId, content: message }),
       },
     );

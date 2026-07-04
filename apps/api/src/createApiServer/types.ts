@@ -21,4 +21,10 @@ export type CreateApiServerOptions = {
   monitorService?: MonitorService;
   invalidateClaudeUsageCache?: () => void;
   allowRemoteAccess?: boolean;
+  /**
+   * OCT-01 hardening. When set, mutating requests (POST/PUT/PATCH/DELETE) must
+   * present this token via `Authorization: Bearer` or `X-Api-Key`. Unset (the
+   * default) preserves the loopback-open behaviour the live fleet relies on.
+   */
+  apiToken?: string | undefined;
 };
