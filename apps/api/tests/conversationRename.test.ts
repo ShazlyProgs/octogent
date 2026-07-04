@@ -92,8 +92,9 @@ describe("rename-conversation adapter — runtime.renameConversation (#45 Phase 
   it("persists a title over the transcript store and surfaces it on the native read", () => {
     const { runtime } = createRuntimeWithConversation("terminal-1");
 
-    // Before rename the conversation has no title.
-    expect(runtime.readConversationSession("terminal-1")?.title).toBeNull();
+    // Before rename the conversation shows the auto-derived title from its first user turn
+    // (#45 Phase 3 [D9] auto-title fold) — a stored rename must override it.
+    expect(runtime.readConversationSession("terminal-1")?.title).toBe("draft the launch note");
 
     const result = runtime.renameConversation("terminal-1", "  Launch planning  ");
     expect(result.status).toBe("renamed");
@@ -114,14 +115,15 @@ describe("rename-conversation adapter — runtime.renameConversation (#45 Phase 
     expect(runtime.readConversationSession("terminal-1")?.title).toBe("Second");
   });
 
-  it("rejects a blank title (legacy required-field 400) and does not create a title", () => {
+  it("rejects a blank title (legacy required-field 400) and pins nothing", () => {
     const { runtime } = createRuntimeWithConversation("terminal-1");
     const result = runtime.renameConversation("terminal-1", "   ");
     expect(result.status).toBe("invalid");
     if (result.status === "invalid") {
       expect(result.error).toBe("title is required");
     }
-    expect(runtime.readConversationSession("terminal-1")?.title).toBeNull();
+    // No stored title was pinned — the read still falls back to the auto-derived title.
+    expect(runtime.readConversationSession("terminal-1")?.title).toBe("draft the launch note");
   });
 
   it("returns no-conversation when neither a terminal record nor a transcript exists (legacy 404)", () => {

@@ -146,7 +146,12 @@ const CHAT_PARITY: ChatParityCapability[] = [
     disposition: "adapter",
     octogentParity:
       "octogent-native title derived from ConversationSessionSummary.firstUserTurnPreview (auto-title folds in here); the legacy LLM title is a nicety, not a dependency.",
-    parityProven: false,
+    // PROVEN — Phase 3 milestone 5 (MASTER-LIST r92): conversation-title adapter is live. Pure
+    // contract in application/conversationTitle.ts (deriveConversationTitle = the deterministic
+    // auto-title; resolveConversationTitle = stored-wins-else-derived read precedence). The read
+    // path auto-derives (auto-title fold); POST /api/conversations/:id/title → runtime
+    // .generateConversationTitle PINS the derived title in the sidecar. No LLM.
+    parityProven: true,
   },
   {
     id: "conversation-summary",

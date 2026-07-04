@@ -575,7 +575,9 @@ describe("createApiServer", () => {
       {
         sessionId: "terminal-1",
         tentacleId: "terminal-1",
-        title: null,
+        // #45 Phase 3 [D9] auto-title fold: with no stored title, the title auto-derives from the
+        // first user turn preview ("build export").
+        title: "build export",
         startedAt: "2026-03-05T10:00:00.000Z",
         endedAt: "2026-03-05T10:00:04.000Z",
         lastEventAt: "2026-03-05T10:00:04.000Z",

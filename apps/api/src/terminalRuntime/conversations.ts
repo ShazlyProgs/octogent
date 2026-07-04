@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type {
-  ConversationSearchHit,
-  ConversationSearchResult,
-  ConversationSessionDetail,
-  ConversationSessionSummary,
-  ConversationTurn,
+import {
+  type ConversationSearchHit,
+  type ConversationSearchResult,
+  type ConversationSessionDetail,
+  type ConversationSessionSummary,
+  type ConversationTurn,
+  resolveConversationTitle,
 } from "@octogent/core";
 
 import type { AgentRuntimeState } from "../agentStateDetection";
@@ -347,13 +348,17 @@ export const readConversationSession = (
   const summary = buildConversationSummary(sessionId, events, turns);
 
   // #45 Phase 3 [D9] title resolution: an explicitly stored title (rename / generate-title) wins,
-  // otherwise null here — the auto-derive-from-first-turn fold lands with the conversation-title
-  // adapter (Phase 3 m5). Read from the metadata sidecar over the transcript store.
+  // otherwise the auto-title derived from the first user turn (auto-title fold, Phase 3 m5),
+  // otherwise null. The stored title lives in the metadata sidecar over the transcript store.
   const meta = readConversationMeta(transcriptDirectoryPath, sessionId);
+  const resolvedTitle = resolveConversationTitle({
+    storedTitle: meta?.title ?? null,
+    firstUserTurnPreview: summary.firstUserTurnPreview,
+  });
 
   return {
     ...summary,
-    title: meta?.title ?? null,
+    title: resolvedTitle,
     firstUserTurnPreview: truncatePreview(summary.firstUserTurnPreview),
     lastUserTurnPreview: truncatePreview(summary.lastUserTurnPreview),
     lastAssistantTurnPreview: truncatePreview(summary.lastAssistantTurnPreview),

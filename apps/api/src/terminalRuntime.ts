@@ -10,6 +10,7 @@ import {
   buildConversationInputSubmit,
   buildConversationRename,
   buildCreateConversationRequest,
+  deriveConversationTitle,
   resolveSendMessageDisposition,
 } from "@octogent/core";
 import type { WebSocket } from "ws";
@@ -98,6 +99,16 @@ export type CreateConversationResult =
 export type RenameConversationResult =
   | { status: "renamed"; sessionId: string; title: string }
   | { status: "invalid"; error: string }
+  | { status: "no-conversation" };
+
+/**
+ * Result of generating (pinning) a conversation title (#45 Phase 3 [D9] conversation-title
+ * adapter). Discriminated so the HTTP route maps each case: titled → 200 with the pinned title,
+ * no-title → 200 with title:null (no derivable first turn yet), no-conversation → 404.
+ */
+export type GenerateConversationTitleResult =
+  | { status: "titled"; sessionId: string; title: string }
+  | { status: "no-title"; sessionId: string }
   | { status: "no-conversation" };
 
 export const createTerminalRuntime = ({
@@ -536,6 +547,27 @@ export const createTerminalRuntime = ({
 
       writeConversationMeta(transcriptDirectoryPath, sessionId, { title: normalized.title });
       return { status: "renamed", sessionId, title: normalized.title };
+    },
+
+    // #45 Phase 3 [D9] chat conversation-title adapter. The octogent-native form of the legacy
+    // dashboard Chat's generate-title + auto-title, folded into one: derive a title from the
+    // conversation's first user turn (NO LLM) and PIN it in the metadata sidecar. Read-time
+    // auto-derivation already surfaces a title without this call; generate PINS it so later turns
+    // don't shift the displayed title. Returns no-conversation (404) when the session is unknown,
+    // no-title when there is no first turn long enough to derive one yet.
+    generateConversationTitle(sessionId: string): GenerateConversationTitleResult {
+      const detail = readConversationSession(transcriptDirectoryPath, sessionId);
+      if (!detail) {
+        return { status: "no-conversation" };
+      }
+
+      const derived = deriveConversationTitle(detail.firstUserTurnPreview);
+      if (!derived) {
+        return { status: "no-title", sessionId };
+      }
+
+      writeConversationMeta(transcriptDirectoryPath, sessionId, { title: derived });
+      return { status: "titled", sessionId, title: derived };
     },
 
     // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's
