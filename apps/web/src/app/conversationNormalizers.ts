@@ -90,6 +90,7 @@ export const normalizeConversationSessionSummary = (
   return {
     sessionId,
     tentacleId,
+    title: asString(record.title),
     startedAt: asString(record.startedAt),
     endedAt: asString(record.endedAt),
     lastEventAt: asString(record.lastEventAt),
