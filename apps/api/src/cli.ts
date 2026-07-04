@@ -12,6 +12,8 @@ import {
   buildVerifyPrompt,
   findBackOfficeTool,
   getBackOfficeToolDefinitions,
+  getChatParityCapabilities,
+  summarizeChatParity,
   toBackOfficeInputSchema,
 } from "@octogent/core";
 import {
@@ -505,6 +507,39 @@ const runVerify = () => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// #45 W-ORCH-NATIVE Phase 3 [D9] — chat-parity contract. Inspects the parity
+// matrix that gates retiring the legacy :3001 dashboard Chat (no hard cut until
+// every non-drop capability is native or a proven adapter). Pure registry lives
+// in @octogent/core (chatParity). See fleet/CHAT-PARITY.md.
+// ---------------------------------------------------------------------------
+
+const runChatParity = () => {
+  const summary = summarizeChatParity();
+  if (args.includes("--summary")) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  const symbol: Record<string, string> = {
+    native: "[native] ",
+    adapter: "[adapter]",
+    drop: "[drop]   ",
+  };
+  console.log("Chat-parity matrix (#45 Phase 3 [D9] — supersede the dashboard Chat):");
+  for (const cap of getChatParityCapabilities()) {
+    const proven = cap.disposition === "adapter" ? (cap.parityProven ? " ✓" : " …") : "";
+    console.log(
+      `  ${symbol[cap.disposition] ?? cap.disposition} ${cap.id}${proven}  (legacy ${cap.legacyRoute})`,
+    );
+    console.log(`      ${cap.title} — ${cap.octogentParity}`);
+  }
+  console.log(`\n  ${summary.native} native · ${summary.adapter} adapter · ${summary.drop} drop`);
+  console.log(
+    `  retire-ready: ${summary.retireReady ? "YES" : "NO"}${summary.pendingAdapters.length ? ` (pending adapters: ${summary.pendingAdapters.join(", ")})` : ""}`,
+  );
+};
+
 const tentacleCreate = async () => {
   const name = args[2];
   if (!name || name.startsWith("-")) {
@@ -758,6 +793,10 @@ const main = async () => {
     return runVerify();
   }
 
+  if (command === "chat-parity") {
+    return runChatParity();
+  }
+
   console.log(`Usage:
   octogent                             Start the dashboard in the current project
   octogent init [project-name]         Initialize the current directory explicitly
@@ -790,7 +829,10 @@ const main = async () => {
     --scope <text>                     In-scope fence (flags scope creep)
     --context <text>                   Extra auditor context
     --descriptor '<json>'              Full WorkProductDescriptor JSON (incl. evidence[])
-    --schema                           Print the verdict JSON schema instead of the prompt`);
+    --schema                           Print the verdict JSON schema instead of the prompt
+
+  octogent chat-parity                 Show the dashboard-Chat supersede matrix (#45 Phase 3)
+    --summary                          Print the parity summary + retire-ready gate as JSON`);
   process.exit(1);
 };
 

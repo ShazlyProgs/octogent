@@ -15,6 +15,7 @@ This directory is the **in-repo skeleton** of the octogent-native standing fleet
 | `../packages/core/src/application/fleetPlan.ts` | Pure manifest validation + parent-before-child spawn ordering (tests in `packages/core/tests/fleetPlan.test.ts`). |
 | `../apps/api/src/fleetSpawn.ts` | The spawn runner (tests in `apps/api/tests/fleetSpawn.test.ts`). |
 | `BACKOFFICE-TOOLS.md` | **[Phase 2]** the fleet's `:3001` back-office "tools" seam — curated registry (`packages/core/src/application/backOfficeTools.ts`) + HTTP client (`apps/api/src/backOfficeClient.ts`) + `octogent backoffice` CLI. The fleet consumes CRM + Sara voice as TOOLS; the retiring engine tools are deliberately excluded. |
+| `CHAT-PARITY.md` | **[Phase 3 m1]** the dashboard-Chat supersede contract ([D9]) — the parity matrix (`packages/core/src/application/chatParity.ts`) mapping every legacy `routes/conversations.ts` capability to native/adapter/drop, plus the machine-checkable "no hard cut" retire gate + `octogent chat-parity` CLI. Grounds WHAT parity means before the chat is wired. |
 
 ## Rulings → implementation map (decision doc §8)
 
@@ -27,7 +28,8 @@ This directory is the **in-repo skeleton** of the octogent-native standing fleet
 | D5 | Octogent native worktree mode + verify git-deny parity | **Verified: NO native deny exists** (see below) → `worktree-claude-settings.json` + staging step in the recipes |
 | D6 | Independent fleet per machine, vault git ferries | `fleet.json` comment + prompt standing order #6 |
 | D8 | Tentacles are native Claude Code sessions | Octogent terminals ARE Claude Code sessions; no `claude-client.ts` in the loop |
-| D9/D10 | Chat supersede + briefings retire | Phases 3-4, NOT built here (Phase 1 only) |
+| D9 | Chat supersede (build parity first, no hard cut) | Phase 3 m1: parity contract + retire gate — `chatParity.ts` + `CHAT-PARITY.md` + `octogent chat-parity`. Chat wiring + dashboard-Chat retirement are later milestones / Phase 4. |
+| D10 | Briefings retire | Phase 4, NOT built yet |
 
 ## [D5] git-deny parity — verification result (2026-07-04)
 
@@ -66,5 +68,5 @@ Mohamed prompts the CEO terminal → CEO delegates to one C-suite child via chan
 ## What Phase 1 deliberately does NOT do
 
 - No `:3001` code changes (excision is Phase 4; back-office services stay live and untouched).
-- No Chat parity (Phase 3), no briefings retirement (Phase 4), no A5 autonomous loop (Phase 6).
+- No Chat *wiring* — Phase 3 m1 landed the parity CONTRACT + retire gate only (`CHAT-PARITY.md`); the interactive octogent chat is later Phase 3 milestones. No briefings retirement (Phase 4), no A5 autonomous loop (Phase 6).
 - No live spawn was executed at build time — the fleet perturbs the live dashboard fleet and is operator-gated.
