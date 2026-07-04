@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "fleetId": "csuite",
+  "comment": "#45 W-ORCH-NATIVE Phase 1 — standing C-suite fleet (decision doc §8 rulings D1/D2). One fleet PER MACHINE (D6); machines coordinate via vault git ferries, never cross-host channels. Stand-up is operator-gated: see fleet/README.md.",
+  "roles": [
+    {
+      "id": "fleet-ceo",
+      "name": "CEO — Fleet Root",
+      "parentRoleId": null,
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "Strategic root of the standing fleet. Mohamed prompts the CEO; the CEO delegates down the C-suite tree.",
+      "personaSource": "$AGENTS/agents/ceo.md"
+    },
+    {
+      "id": "fleet-cos",
+      "name": "Chief of Staff",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "Fleet health + orchestration optimization: tentacle utilization, CONTEXT quality, structural recommendations.",
+      "personaSource": "$AGENTS/agents/cos.md"
+    },
+    {
+      "id": "fleet-cto",
+      "name": "CTO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "All Collega technical work: plans, spawns ephemeral specialist subagents in worktrees, reviews and reports up.",
+      "personaSource": "$AGENTS/agents/cto.md"
+    },
+    {
+      "id": "fleet-general-engineer",
+      "name": "General Engineer",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "Everything non-SRL/non-Collega: Farid R&D, hobby projects, personal logistics. Spawns Farid/Hobby specialist subagents.",
+      "personaSource": "$AGENTS/agents/general-engineer.md"
+    },
+    {
+      "id": "fleet-cpo",
+      "name": "CPO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "Product roadmap integrity: dependency chain, milestone gates, scope-change protocol.",
+      "personaSource": "$AGENTS/agents/cpo.md"
+    },
+    {
+      "id": "fleet-cmo",
+      "name": "CMO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "External narrative: positioning, competitive claims, claim verification before anything goes public.",
+      "personaSource": "$AGENTS/agents/cmo.md"
+    },
+    {
+      "id": "fleet-cfo",
+      "name": "CFO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "csuite-agent-init",
+      "description": "Financial governance: pricing architecture, Italian tax/compliance calendar, cost-of-delay analysis.",
+      "personaSource": "$AGENTS/agents/cfo.md"
+    }
+  ],
+  "specialists": {
+    "workspaceMode": "worktree",
+    "promptTemplate": "tentacle-spawn",
+    "ephemeral": true,
+    "claudeSettingsTemplate": "fleet/worktree-claude-settings.json"
+  }
+}

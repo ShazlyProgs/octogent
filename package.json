@@ -21,6 +21,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "pnpm --filter @octogent/web build && pnpm --filter @octogent/web exec vite build --config vite.api.bundle.config.mts && node scripts/build-package.mjs",
     "smoke:public-install": "node scripts/smoke-public-install.mjs",
+    "fleet:spawn": "pnpm --filter @octogent/api exec tsx src/fleetSpawn.ts",
     "test": "pnpm -r test",
     "lint": "biome check .",
     "format": "biome format --write ."
