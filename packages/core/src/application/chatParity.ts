@@ -106,8 +106,12 @@ const CHAT_PARITY: ChatParityCapability[] = [
     legacyRoute: "POST /",
     disposition: "adapter",
     octogentParity:
-      "Start a chat session bound to a tentacle terminal (native Claude Code session, [D8]); needs a create-chat-session entry over the terminal runtime.",
-    parityProven: false,
+      "Start a chat session bound to a tentacle terminal (native Claude Code session, [D8]) via createTerminal; the required initialPrompt is the honest analog of legacy's required agent binding.",
+    // PROVEN — Phase 3 milestone 3 (MASTER-LIST r92): create-conversation adapter is live. Pure
+    // contract in application/createConversation.ts (validation + normalization → createTerminal
+    // params); wired as runtime.createConversation over the existing createTerminal primitive,
+    // which spawns a live Claude Code session; route POST /api/conversations → 201 / 400.
+    parityProven: true,
   },
   {
     id: "rename-conversation",

@@ -55,16 +55,24 @@ describe("chat-parity registry (#45 Phase 3 [D9])", () => {
     expect(delegate?.octogentParity).toMatch(/tentacle-tree|channel messaging/i);
   });
 
-  it("is NOT retire-ready while adapters remain unproven (D9 no-hard-cut gate)", () => {
+  it("computes the D9 retire gate honestly from the live matrix (retireReady ⇔ no pending adapters)", () => {
+    const caps = getChatParityCapabilities();
     const summary = summarizeChatParity();
-    expect(summary.total).toBe(getChatParityCapabilities().length);
+    expect(summary.total).toBe(caps.length);
     expect(summary.native + summary.adapter + summary.drop).toBe(summary.total);
-    expect(summary.retireReady).toBe(false);
-    // send-message is now proven (Phase 3 m2), so it drops OFF the pending list — one fewer than
-    // the total adapter count — while the remaining adapters keep the retire gate shut.
-    expect(summary.pendingAdapters.length).toBe(summary.adapter - 1);
+
+    // pendingAdapters is EXACTLY the adapter rows whose parity is not yet proven — the honesty-
+    // load-bearing D9 gate. This assertion tracks the live matrix as Phase 3 milestones land, so
+    // a false flip (proven:true without a real adapter) would be caught here rather than papered
+    // over by a hard-coded count.
+    const expectedPending = caps
+      .filter((cap) => cap.disposition === "adapter" && !cap.parityProven)
+      .map((cap) => cap.id);
+    expect(summary.pendingAdapters).toEqual(expectedPending);
+    // The gate opens (retireReady) if and only if nothing is pending.
+    expect(summary.retireReady).toBe(summary.pendingAdapters.length === 0);
+    // send-message (the Phase 3 m2 keystone) stays proven, so it is never pending.
     expect(summary.pendingAdapters).not.toContain("send-message");
-    expect(summary.pendingAdapters.length).toBeGreaterThan(0);
   });
 
   it("becomes retire-ready only once every adapter is proven (drops are excluded from the gate)", () => {

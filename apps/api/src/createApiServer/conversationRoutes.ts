@@ -26,6 +26,35 @@ export const handleConversationsCollectionRoute: ApiRouteHandler = async (
     return true;
   }
 
+  // #45 Phase 3 [D9] — create-conversation adapter. Parity with the legacy dashboard Chat's
+  // POST /: start a chat session bound to a tentacle terminal (a live Claude Code session, [D8]).
+  // Returns 201 with the new conversation's session identity, or 400 for invalid input.
+  if (request.method === "POST") {
+    const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+    if (!bodyReadResult.ok) {
+      return true;
+    }
+
+    const result = runtime.createConversation(bodyReadResult.payload);
+    if (result.status === "invalid") {
+      writeJson(response, 400, { error: result.error }, corsOrigin);
+      return true;
+    }
+
+    writeJson(
+      response,
+      201,
+      {
+        sessionId: result.sessionId,
+        tentacleId: result.tentacleId,
+        tentacleName: result.tentacleName,
+        workspaceMode: result.workspaceMode,
+      },
+      corsOrigin,
+    );
+    return true;
+  }
+
   if (request.method !== "GET") {
     writeMethodNotAllowed(response, corsOrigin);
     return true;

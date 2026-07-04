@@ -4,8 +4,10 @@ import type { Duplex } from "node:stream";
 
 import type { TerminalSnapshot } from "@octogent/core";
 import {
+  CreateConversationError,
   SendMessageError,
   buildConversationInputSubmit,
+  buildCreateConversationRequest,
   resolveSendMessageDisposition,
 } from "@octogent/core";
 import type { WebSocket } from "ws";
@@ -69,6 +71,21 @@ export type SubmitConversationMessageResult =
   | { status: "busy"; tentacleId: string }
   | { status: "no-session" }
   | { status: "invalid-content"; error: string };
+
+/**
+ * Result of starting a chat conversation (#45 Phase 3 [D9] create-conversation adapter).
+ * Discriminated so the HTTP route maps each case to the legacy-parity status code without a
+ * try/catch: created → 201, invalid → 400.
+ */
+export type CreateConversationResult =
+  | {
+      status: "created";
+      sessionId: string;
+      tentacleId: string;
+      tentacleName: string;
+      workspaceMode: TentacleWorkspaceMode;
+    }
+  | { status: "invalid"; error: string };
 
 export const createTerminalRuntime = ({
   workspaceCwd,
@@ -440,6 +457,45 @@ export const createTerminalRuntime = ({
 
     searchConversations(query: string) {
       return searchConversations(transcriptDirectoryPath, query);
+    },
+
+    // #45 Phase 3 [D9] chat create-conversation adapter. The octogent-native form of the legacy
+    // dashboard Chat's `POST /` ("start a conversation bound to an agent"): create a chat session
+    // bound to a tentacle terminal. Composes the pure buildCreateConversationRequest contract
+    // (validation → legacy 400) over the existing createTerminal primitive, which spawns a LIVE
+    // Claude Code session ([D8]) ready to receive chat turns via submitConversationMessage.
+    createConversation(input: unknown): CreateConversationResult {
+      let normalized: ReturnType<typeof buildCreateConversationRequest>;
+      try {
+        normalized = buildCreateConversationRequest((input ?? {}) as Record<string, unknown>);
+      } catch (error) {
+        if (error instanceof CreateConversationError) {
+          return { status: "invalid", error: error.message };
+        }
+        throw error;
+      }
+
+      try {
+        const snapshot = createTerminal({
+          workspaceMode: normalized.workspaceMode,
+          initialPrompt: normalized.initialPrompt,
+          ...(normalized.tentacleName ? { tentacleName: normalized.tentacleName } : {}),
+        });
+        return {
+          status: "created",
+          sessionId: snapshot.terminalId,
+          tentacleId: snapshot.tentacleId,
+          // TerminalSnapshot types these optional, but toTerminalSnapshot always sets them; the
+          // fallbacks satisfy the compiler without changing the runtime value.
+          tentacleName: snapshot.tentacleName ?? snapshot.terminalId,
+          workspaceMode: snapshot.workspaceMode ?? normalized.workspaceMode,
+        };
+      } catch (error) {
+        if (error instanceof RuntimeInputError) {
+          return { status: "invalid", error: error.message };
+        }
+        throw error;
+      }
     },
 
     // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's

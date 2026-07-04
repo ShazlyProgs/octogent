@@ -22,7 +22,7 @@ Three dispositions. **native** = octogent already serves it (its existing read/l
 | List conversations | `GET /` | native | `GET /api/conversations` |
 | Get conversation + messages | `GET /:id` | native | `GET /api/conversations/:id` |
 | Delete conversation | `DELETE /:id` | native | `DELETE /api/conversations/:id` (+ clear-all) |
-| Start a conversation | `POST /` | adapter | create a chat session bound to a tentacle terminal ([D8]) |
+| Start a conversation | `POST /` | adapter ✓ **PROVEN** | **built Phase 3 m3** — create a chat session bound to a tentacle terminal ([D8]) via `createTerminal`; `POST /api/conversations` → `runtime.createConversation` over the pure `createConversation.ts` contract |
 | Rename / update metadata | `PUT /:id` | adapter | session-metadata rename over the transcript store (no LLM) |
 | **Send a message (the chat turn)** | `POST /:id/messages` | adapter ✓ **PROVEN** | **KEYSTONE (built Phase 3 m2)** — submit input to the tentacle session + surface the transcript reply, with the per-conversation processing lock. Now: `POST /api/conversations/:id/messages` → `runtime.submitConversationMessage` over the pure `sendMessage.ts` contract |
 | Generate a title | `POST /:id/generate-title` · `/:id/auto-title` | adapter | derive from `ConversationSessionSummary.firstUserTurnPreview` |
@@ -32,7 +32,7 @@ Three dispositions. **native** = octogent already serves it (its existing read/l
 | Suggested replies | `POST /:id/suggestions` | drop | engine-coupled reply nicety; retire with the engine |
 | Search documents from chat | `GET /documents/search` | drop | KB/RAG — served by the back-office KB tool seam (`BACKOFFICE-TOOLS.md` follow-up), not the chat surface |
 
-Current tally: **3 native · 6 adapter · 3 drop** — of the 6 adapters, **1 proven** (send-message, Phase 3 m2), 5 pending.
+Current tally: **3 native · 6 adapter · 3 drop** — of the 6 adapters, **2 proven** (send-message m2, create-conversation m3), 4 pending.
 
 ## The retire gate (D9 "no hard cut", machine-checkable)
 
@@ -53,6 +53,6 @@ The chat turn is now octogent-native and proven:
 
 ## Cut-line (remaining Phase 3 work — deliberately not yet)
 
-- **5 adapters still pending**: create-session / rename / title / summary / attach. Each lands next, flipping its registry row + adding its own tests.
+- **4 adapters still pending**: rename / title / summary / attach. Each lands next, flipping its registry row + adding its own tests.
 - **No `:3001` change.** The dashboard Chat stays live and untouched; its retirement is Phase 4 (engine excision) and is **gated on `retireReady === true`**, not on a date.
 - **Drops are not re-implemented.** `delegate` / `suggestions` / `documents-search` retire with the engine; they are excluded from the gate by design.
