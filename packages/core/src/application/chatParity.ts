@@ -160,7 +160,11 @@ const CHAT_PARITY: ChatParityCapability[] = [
     disposition: "adapter",
     octogentParity:
       "octogent-native session summary over ConversationSessionSummary (turn/user/assistant counts + previews already exist in the domain).",
-    parityProven: false,
+    // PROVEN — Phase 3 milestone 6 (MASTER-LIST r92): conversation-summary adapter is live. Pure
+    // contract in application/conversationSummary.ts (buildConversationSummaryText = a deterministic
+    // recap over the transcript's counts + previews, NO LLM); wired as runtime.summarizeConversation
+    // (persists to the sidecar); route POST /api/conversations/:id/summarize → 200 / 404.
+    parityProven: true,
   },
   {
     id: "attach-document",

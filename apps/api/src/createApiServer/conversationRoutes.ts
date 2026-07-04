@@ -12,6 +12,7 @@ const CONVERSATION_ITEM_PATH_PATTERN = /^\/api\/conversations\/([^/]+)$/;
 const CONVERSATION_EXPORT_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/export$/;
 const CONVERSATION_MESSAGES_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/messages$/;
 const CONVERSATION_TITLE_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/title$/;
+const CONVERSATION_SUMMARIZE_PATH_PATTERN = /^\/api\/conversations\/([^/]+)\/summarize$/;
 
 export const handleConversationsCollectionRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
@@ -186,6 +187,34 @@ export const handleConversationTitleRoute: ApiRouteHandler = async (
   }
 
   writeJson(response, 200, { sessionId: result.sessionId, title: result.title }, corsOrigin);
+  return true;
+};
+
+// #45 Phase 3 [D9] — conversation-summary adapter. Parity with the legacy dashboard Chat's
+// POST /:id/summarize: a deterministic recap over the transcript's counts + previews (no LLM).
+export const handleConversationSummarizeRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const match = requestUrl.pathname.match(CONVERSATION_SUMMARIZE_PATH_PATTERN);
+  if (!match) {
+    return false;
+  }
+
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const sessionId = decodeURIComponent(match[1] ?? "");
+  const result = runtime.summarizeConversation(sessionId);
+
+  if (result.status === "no-conversation") {
+    writeJson(response, 404, { error: "Conversation session not found." }, corsOrigin);
+    return true;
+  }
+
+  writeJson(response, 200, { sessionId: result.sessionId, summary: result.summary }, corsOrigin);
   return true;
 };
 

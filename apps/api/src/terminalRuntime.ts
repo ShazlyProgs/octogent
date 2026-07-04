@@ -9,6 +9,7 @@ import {
   SendMessageError,
   buildConversationInputSubmit,
   buildConversationRename,
+  buildConversationSummaryText,
   buildCreateConversationRequest,
   deriveConversationTitle,
   resolveSendMessageDisposition,
@@ -109,6 +110,15 @@ export type RenameConversationResult =
 export type GenerateConversationTitleResult =
   | { status: "titled"; sessionId: string; title: string }
   | { status: "no-title"; sessionId: string }
+  | { status: "no-conversation" };
+
+/**
+ * Result of summarizing a conversation (#45 Phase 3 [D9] conversation-summary adapter).
+ * Discriminated so the HTTP route maps each case: summarized → 200 with the recap, no-conversation
+ * → 404.
+ */
+export type SummarizeConversationResult =
+  | { status: "summarized"; sessionId: string; summary: string }
   | { status: "no-conversation" };
 
 export const createTerminalRuntime = ({
@@ -568,6 +578,29 @@ export const createTerminalRuntime = ({
 
       writeConversationMeta(transcriptDirectoryPath, sessionId, { title: derived });
       return { status: "titled", sessionId, title: derived };
+    },
+
+    // #45 Phase 3 [D9] chat conversation-summary adapter. The octogent-native form of the legacy
+    // dashboard Chat's `POST /:id/summarize`: a DETERMINISTIC recap over the transcript's already-
+    // computed counts + previews (NO LLM). Persists the recap in the metadata sidecar (parity with
+    // legacy storing conversation.summary) and returns it. 404 when the session is unknown.
+    summarizeConversation(sessionId: string): SummarizeConversationResult {
+      const detail = readConversationSession(transcriptDirectoryPath, sessionId);
+      if (!detail) {
+        return { status: "no-conversation" };
+      }
+
+      const summary = buildConversationSummaryText({
+        turnCount: detail.turnCount,
+        userTurnCount: detail.userTurnCount,
+        assistantTurnCount: detail.assistantTurnCount,
+        firstUserTurnPreview: detail.firstUserTurnPreview,
+        lastUserTurnPreview: detail.lastUserTurnPreview,
+        lastAssistantTurnPreview: detail.lastAssistantTurnPreview,
+      });
+
+      writeConversationMeta(transcriptDirectoryPath, sessionId, { summary });
+      return { status: "summarized", sessionId, summary };
     },
 
     // #45 Phase 3 [D9] chat send-message KEYSTONE adapter. Submits a chat turn into a tentacle's

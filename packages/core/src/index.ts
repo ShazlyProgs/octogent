@@ -2,6 +2,7 @@ export * from "./application/buildTerminalList";
 export * from "./application/fleetPlan";
 export * from "./application/backOfficeTools";
 export * from "./application/chatParity";
+export * from "./application/conversationSummary";
 export * from "./application/conversationTitle";
 export * from "./application/createConversation";
 export * from "./application/renameConversation";

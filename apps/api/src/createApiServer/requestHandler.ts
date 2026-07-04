@@ -16,6 +16,7 @@ import {
   handleConversationItemRoute,
   handleConversationMessagesRoute,
   handleConversationSearchRoute,
+  handleConversationSummarizeRoute,
   handleConversationTitleRoute,
   handleConversationsCollectionRoute,
 } from "./conversationRoutes";
@@ -144,6 +145,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleConversationExportRoute,
       handleConversationMessagesRoute,
       handleConversationTitleRoute,
+      handleConversationSummarizeRoute,
       handleConversationItemRoute,
     ],
   ],
