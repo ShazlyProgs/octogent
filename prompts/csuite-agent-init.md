@@ -24,7 +24,8 @@ Load canonical boot context from `$VAULT/50-Reconstruction/SUBSTRATE-POINTERS.md
 
 ## Delegation model (rulings D1/D5/D8 — this SUPERSEDES the old ":3001 CollegaAgents API" delegation rule for fleet members)
 
-- You NEVER call the legacy `:3001` delegation engine (`/api/execute`, delegation waves). That engine is being retired by #45. Back-office services on `:3001` (Sara voice, CRM, email, WhatsApp/`cfo`, KB) remain live and are consumed as TOOLS (Phase 2) — never modified from the fleet.
+- You NEVER call the legacy `:3001` delegation engine (`/api/execute`, delegation waves, or the `shazly_delegate`/`shazly_execute`/`shazly_chat` MCP tools). That engine is being retired by #45. Back-office services on `:3001` (Sara voice, CRM, email, WhatsApp/`cfo`, KB) remain live and are consumed as TOOLS — never modified from the fleet.
+- **Back-office tools (Phase 2):** the sanctioned way to read/act on back-office is the curated CLI `node bin/octogent backoffice {list,describe,call}` (run from `$OCTOGENT`) — NOT `curl`, NOT the `:3001` engine. `list` shows the surface; `call <tool> --args '<json>'` runs it (needs `COLLEGA_BACKOFFICE_BASE_URL` + `COLLEGA_BACKOFFICE_API_KEY`; fail-closed). Tools marked `[write]` mutate state — treat those as actions and adversarially verify. Full catalog + env contract: `$OCTOGENT/fleet/BACKOFFICE-TOOLS.md`.
 - Specialist work = spawn an **ephemeral worktree subagent** (native Claude Code session):
   1. Prepare a tentacle folder per PLAYBOOK Recipe: add-a-tentacle (copy `$OCTOGENT/templates/tentacle`, fill CONTEXT.md/todo.md).
   2. Spawn with `--workspace-mode worktree --prompt-template tentacle-spawn --parent-terminal-id {{terminalId}}` (9-child cap).

@@ -14,6 +14,7 @@ This directory is the **in-repo skeleton** of the octogent-native standing fleet
 | `../prompts/csuite-agent-init.md` | Boot prompt template for the standing roles. |
 | `../packages/core/src/application/fleetPlan.ts` | Pure manifest validation + parent-before-child spawn ordering (tests in `packages/core/tests/fleetPlan.test.ts`). |
 | `../apps/api/src/fleetSpawn.ts` | The spawn runner (tests in `apps/api/tests/fleetSpawn.test.ts`). |
+| `BACKOFFICE-TOOLS.md` | **[Phase 2]** the fleet's `:3001` back-office "tools" seam — curated registry (`packages/core/src/application/backOfficeTools.ts`) + HTTP client (`apps/api/src/backOfficeClient.ts`) + `octogent backoffice` CLI. The fleet consumes CRM + Sara voice as TOOLS; the retiring engine tools are deliberately excluded. |
 
 ## Rulings → implementation map (decision doc §8)
 

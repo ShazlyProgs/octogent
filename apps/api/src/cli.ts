@@ -4,6 +4,17 @@ import { createServer } from "node:net";
 import { basename, join, resolve } from "node:path";
 
 import {
+  BackOfficeToolError,
+  findBackOfficeTool,
+  getBackOfficeToolDefinitions,
+  toBackOfficeInputSchema,
+} from "@octogent/core";
+import {
+  BackOfficeConfigError,
+  executeBackOfficeTool,
+  resolveBackOfficeConfigFromEnv,
+} from "./backOfficeClient";
+import {
   ensureOctogentGitignoreEntry,
   ensureProjectScaffold,
   loadProjectConfig,
@@ -342,6 +353,93 @@ const parseJsonFlag = (flag: string): Record<string, string> | undefined => {
   }
 };
 
+const parseObjectFlag = (flag: string): Record<string, unknown> => {
+  const raw = parseFlag(flag);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.error(`Error: ${flag} must be a JSON object.`);
+      process.exit(1);
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    console.error(`Error: ${flag} must be valid JSON.`);
+    process.exit(1);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Back-office tools (#45 W-ORCH-NATIVE Phase 2). The fleet consumes the kept
+// :3001 back-office services (CRM, Sara voice, ...) as TOOLS via this curated
+// command — never the retired delegation engine. See fleet/BACKOFFICE-TOOLS.md.
+// ---------------------------------------------------------------------------
+
+const backOfficeList = () => {
+  const tools = getBackOfficeToolDefinitions();
+  console.log("Back-office tools (#45 Phase 2 — :3001 services consumed as TOOLS):");
+  for (const tool of tools) {
+    const flag = tool.mutates ? "  [write]" : "";
+    console.log(`  ${tool.name}  (${tool.method} ${tool.pathTemplate})${flag}`);
+    console.log(`      ${tool.description}`);
+  }
+};
+
+const backOfficeDescribe = () => {
+  const name = args[2];
+  if (!name || name.startsWith("-")) {
+    console.error("Error: tool name is required.");
+    process.exit(1);
+  }
+  const tool = findBackOfficeTool(name);
+  if (!tool) {
+    console.error(`Error: unknown back-office tool "${name}". Run \`octogent backoffice list\`.`);
+    process.exit(1);
+  }
+  console.log(
+    JSON.stringify(
+      {
+        name: tool.name,
+        method: tool.method,
+        path: tool.pathTemplate,
+        mutates: tool.mutates,
+        inputSchema: toBackOfficeInputSchema(tool),
+      },
+      null,
+      2,
+    ),
+  );
+};
+
+const backOfficeCall = async () => {
+  const name = args[2];
+  if (!name || name.startsWith("-")) {
+    console.error("Error: tool name is required.");
+    process.exit(1);
+  }
+  const toolArgs = parseObjectFlag("--args");
+  try {
+    const config = resolveBackOfficeConfigFromEnv();
+    const result = await executeBackOfficeTool(name, toolArgs, config);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) {
+      process.exit(1);
+    }
+  } catch (error) {
+    const message =
+      error instanceof BackOfficeConfigError || error instanceof BackOfficeToolError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+};
+
 const tentacleCreate = async () => {
   const name = args[2];
   if (!name || name.startsWith("-")) {
@@ -579,6 +677,18 @@ const main = async () => {
     }
   }
 
+  if (command === "backoffice") {
+    if (args[1] === "list" || args[1] === "ls") {
+      return backOfficeList();
+    }
+    if (args[1] === "describe") {
+      return backOfficeDescribe();
+    }
+    if (args[1] === "call") {
+      return backOfficeCall();
+    }
+  }
+
   console.log(`Usage:
   octogent                             Start the dashboard in the current project
   octogent init [project-name]         Initialize the current directory explicitly
@@ -597,7 +707,13 @@ const main = async () => {
     --prompt-template                  Prompt template name
     --prompt-variables                 JSON object of prompt template variables
   octogent channel send <id> <msg>     Send a channel message
-  octogent channel list <id>           List channel messages`);
+  octogent channel list <id>           List channel messages
+
+  octogent backoffice list             List the :3001 back-office tools (#45 Phase 2)
+  octogent backoffice describe <tool>  Show a tool's HTTP mapping + input schema
+  octogent backoffice call <tool>      Call a back-office tool
+    --args '<json>'                    Tool arguments as a JSON object
+                                       (needs COLLEGA_BACKOFFICE_BASE_URL + _API_KEY)`);
   process.exit(1);
 };
 

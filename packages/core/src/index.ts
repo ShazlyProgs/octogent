@@ -1,5 +1,6 @@
 export * from "./application/buildTerminalList";
 export * from "./application/fleetPlan";
+export * from "./application/backOfficeTools";
 export * from "./adapters/InMemoryTerminalSnapshotReader";
 export * from "./domain/terminal";
 export * from "./domain/deck";
