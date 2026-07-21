@@ -107,6 +107,7 @@ Start preserves the record and tree edge, rejects an already-running record with
 | `../prompts/csuite-agent-init.md` | Dormant/wake, summon-profile, and concurrency doctrine |
 | `../packages/core/src/application/fleetPlan.ts` | Pure manifest validation and create-plan builders |
 | `../apps/api/src/fleetSpawn.ts` | Dry-run-by-default, operator-gated role runner |
+| `../apps/api/src/fleetVerifyRuntime.ts` | Native verifier producer and fleet-root verdict notification adapter |
 
 Sara deliberately has no Claude seed folder: her manifest record is a bound-service representation and roster changes must never reprovision the live service.
 
@@ -117,7 +118,12 @@ The runner remains dry-run by default and must not be pointed at a live daemon a
 ```bash
 pnpm fleet:spawn
 pnpm fleet:spawn -- --execute
+pnpm fleet:spawn -- --execute --verify
 ```
+
+With `--verify` (or `OCTOGENT_FLEET_VERIFY=1`), the runner starts a separate Claude Code verifier under the fleet root, waits for its schema-validated verdict, and appends one pass/fail record to `<stateDir>/fleet-verify.log.jsonl`. The record contains the full audit prompt and a pointer to the verifier's unsummarized append-only transcript at `<stateDir>/state/transcripts/<verifierTerminalId>.jsonl`. The same verdict and trace pointer are sent to the fleet root through the native channel. `REJECT`, malformed output, timeout, and producer failure all fail closed; `OCTOGENT_FLEET_VERIFY_BLOCK_ON_FIXES=1` also blocks `APPROVE_WITH_FIXES`. The default verifier timeout is ten minutes and can be changed with `OCTOGENT_FLEET_VERIFY_TIMEOUT_MS`.
+
+This is the live [D7] verify substrate. The A5 autonomous proposer remains gated behind FORK-A5-1: any future candidate space is limited to config, manifest, and prompt-template versions, never code, and activation remains a human decision.
 
 Build lanes may validate the manifest, requests, seeds, API routes, and tests. Restart/rollout, live wake, live stop, profile registration, cutover, commit, and push are separate operator actions.
 

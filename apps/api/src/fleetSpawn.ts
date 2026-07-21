@@ -13,10 +13,9 @@
  *                       [--api-base http://127.0.0.1:8787] [--state-dir <path>]
  *                       [--verify]   (or env OCTOGENT_FLEET_VERIFY=1)
  *
- * --verify runs the D4 adversarial-verify auto-run over the completed spawn and appends
- * the audit artifact to <stateDir>/fleet-verify.log.jsonl (gate blocks the spawn on
- * REJECT). Without a wired verdict producer the audit prompt is recorded PENDING for an
- * operator/agent to run — it is never fabricated. Only takes effect with --execute.
+ * --verify runs the D4 adversarial-verify auto-run over the completed spawn, persists the
+ * verdict + full-trace pointer to <stateDir>/fleet-verify.log.jsonl, and surfaces it to the
+ * fleet root. REJECT and verifier failures block. Only takes effect with --execute.
  */
 
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -25,15 +24,16 @@ import { dirname, join, resolve } from "node:path";
 import {
   type FleetManifest,
   type TerminalAgentProvider,
-  type VerdictProducer,
   type VerifyGateDecision,
   type VerifyVerdict,
   type WorkProductDescriptor,
   buildFleetSpawnPlan,
   buildProfileRecords,
+  buildVerifyPrompt,
   parseFleetManifest,
   runAutoVerify,
 } from "@octogent/core";
+import { createFleetVerdictProducer, surfaceFleetVerifyArtifact } from "./fleetVerifyRuntime";
 import { resolvePrompt } from "./prompts";
 
 export type FleetStageAction = {
@@ -156,30 +156,54 @@ export const buildTerminalRequests = (
 // parent-before-child, no orphaned child"). This config-gated hook audits that
 // claim with the adversarial-verify harness (@octogent/core runAutoVerify),
 // records the artifact, and GATES on REJECT — the "auto-run in the spawn loop"
-// milestone the VERIFY-HARNESS.md cut-line deferred. Separable from the LATER A5
-// autonomous loop ([D7]): the verdict PRODUCER is injected (default: none ⇒ the
-// audit prompt is recorded PENDING for an operator/agent to run — it never
-// fabricates a verdict). See fleet/VERIFY-HARNESS.md.
+// milestone the VERIFY-HARNESS.md cut-line deferred. Separable from the gated A5
+// autonomous proposer ([D7]): the production producer is an injected Octogent-native
+// verifier adapter and the deterministic gate never fabricates a verdict.
 // ---------------------------------------------------------------------------
 
 export type FleetVerifyArtifact = {
   fleetId: string;
   spawnedRoleIds: string[];
   status: "passed" | "blocked" | "pending";
+  /** Stable operator-facing pass/fail result; pending only exists for injected/manual adapters. */
+  outcome: "pass" | "fail" | "pending";
   /** The emitted refute-by-default audit prompt (always present). */
   prompt: string;
   /** Parsed verdict, or null when no producer was supplied (status "pending"). */
   verdict: VerifyVerdict | null;
   decision: VerifyGateDecision | null;
+  /** Full append-only terminal transcript, never a summary. */
+  tracePointer: string | null;
+  verifierTerminalId: string | null;
+  /** Producer/validation failure. A failed verifier blocks rather than failing open. */
+  error: string | null;
   at: string;
 };
+
+export type FleetVerifyContext = {
+  fleetId: string;
+  parentTerminalId: string;
+};
+
+export type FleetVerdictProduction = {
+  rawVerdict: unknown;
+  tracePointer: string;
+  verifierTerminalId: string;
+};
+
+export type FleetVerdictProducer = (
+  prompt: string,
+  context: FleetVerifyContext,
+) => unknown | Promise<unknown>;
 
 export type FleetVerifyConfig = {
   enabled: boolean;
   /** Injected LLM/agent that runs the emitted audit prompt. Omit ⇒ PENDING record. */
-  produceVerdict?: VerdictProducer;
+  produceVerdict?: FleetVerdictProducer;
   /** Sink for the audit artifact (append to a log, POST to a bus, etc.). */
-  record: (artifact: FleetVerifyArtifact) => void;
+  record: (artifact: FleetVerifyArtifact) => void | Promise<void>;
+  /** Notify the owning officer/root after the verdict record is durable. */
+  surface?: (artifact: FleetVerifyArtifact, context: FleetVerifyContext) => void | Promise<void>;
   /** Block the spawn on APPROVE_WITH_FIXES too (default false). */
   blockOnFixes?: boolean;
 };
@@ -187,7 +211,9 @@ export type FleetVerifyConfig = {
 export class FleetVerifyBlockedError extends Error {
   readonly artifact: FleetVerifyArtifact;
   constructor(artifact: FleetVerifyArtifact) {
-    super(`Fleet spawn blocked by adversarial-verify: ${artifact.decision?.reason ?? "REJECT"}`);
+    super(
+      `Fleet spawn blocked by adversarial-verify: ${artifact.decision?.reason ?? artifact.error ?? "REJECT"}`,
+    );
     this.name = "FleetVerifyBlockedError";
     this.artifact = artifact;
   }
@@ -227,20 +253,82 @@ export const runFleetSpawnVerify = async (
   config: FleetVerifyConfig,
 ): Promise<FleetVerifyArtifact> => {
   const descriptor = buildFleetSpawnVerifyDescriptor(manifest, spawned);
-  const result = await runAutoVerify(descriptor, {
-    ...(config.produceVerdict ? { produceVerdict: config.produceVerdict } : {}),
-    gate: { blockOnFixes: config.blockOnFixes ?? false },
-  });
+  const rootRole = manifest.roles.find((role) => role.parentRoleId === null);
+  const parentTerminalId = rootRole ? spawned.get(rootRole.id) : undefined;
+  if (!parentTerminalId) {
+    throw new Error("Fleet verify requires a spawned root terminal");
+  }
+  const context: FleetVerifyContext = { fleetId: manifest.fleetId, parentTerminalId };
+  let tracePointer: string | null = null;
+  let verifierTerminalId: string | null = null;
+  const isProduction = (value: unknown): value is FleetVerdictProduction =>
+    value !== null &&
+    typeof value === "object" &&
+    "rawVerdict" in value &&
+    typeof (value as Partial<FleetVerdictProduction>).tracePointer === "string" &&
+    typeof (value as Partial<FleetVerdictProduction>).verifierTerminalId === "string";
+  const recordAndSurface = async (artifact: FleetVerifyArtifact): Promise<void> => {
+    await config.record(artifact);
+    await config.surface?.(artifact, context);
+  };
+
+  let result: Awaited<ReturnType<typeof runAutoVerify>>;
+  try {
+    result = await runAutoVerify(descriptor, {
+      ...(config.produceVerdict
+        ? {
+            produceVerdict: async (prompt: string) => {
+              const produced = await config.produceVerdict?.(prompt, context);
+              if (isProduction(produced)) {
+                tracePointer = produced.tracePointer;
+                verifierTerminalId = produced.verifierTerminalId;
+                return produced.rawVerdict;
+              }
+              return produced;
+            },
+          }
+        : {}),
+      gate: { blockOnFixes: config.blockOnFixes ?? false },
+    });
+  } catch (error) {
+    const failure = error as {
+      message?: unknown;
+      tracePointer?: unknown;
+      verifierTerminalId?: unknown;
+    };
+    const artifact: FleetVerifyArtifact = {
+      fleetId: manifest.fleetId,
+      spawnedRoleIds: [...spawned.keys()],
+      status: "blocked",
+      outcome: "fail",
+      prompt: buildVerifyPrompt(descriptor),
+      verdict: null,
+      decision: null,
+      tracePointer:
+        tracePointer ?? (typeof failure.tracePointer === "string" ? failure.tracePointer : null),
+      verifierTerminalId:
+        verifierTerminalId ??
+        (typeof failure.verifierTerminalId === "string" ? failure.verifierTerminalId : null),
+      error: typeof failure.message === "string" ? failure.message : String(error),
+      at: new Date().toISOString(),
+    };
+    await recordAndSurface(artifact);
+    throw new FleetVerifyBlockedError(artifact);
+  }
   const artifact: FleetVerifyArtifact = {
     fleetId: manifest.fleetId,
     spawnedRoleIds: [...spawned.keys()],
     status: result.status,
+    outcome: result.status === "passed" ? "pass" : result.status === "blocked" ? "fail" : "pending",
     prompt: result.prompt,
     verdict: result.verdict,
     decision: result.decision,
+    tracePointer,
+    verifierTerminalId,
+    error: null,
     at: new Date().toISOString(),
   };
-  config.record(artifact);
+  await recordAndSurface(artifact);
   if (result.status === "blocked") {
     throw new FleetVerifyBlockedError(artifact);
   }
@@ -467,11 +555,15 @@ if (isDirectInvocation()) {
   const argv = process.argv.slice(2);
   const packageRoot = resolve(import.meta.dirname ?? ".", "..", "..", "..");
   const stateDir = parseCliFlag(argv, "--state-dir") ?? resolveDefaultStateDir(packageRoot);
+  const apiBase = parseCliFlag(argv, "--api-base") ?? "http://127.0.0.1:8787";
   const verifyEnabled = process.env.OCTOGENT_FLEET_VERIFY === "1" || argv.includes("--verify");
+  const configuredTimeout = Number(process.env.OCTOGENT_FLEET_VERIFY_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 10 * 60_000;
   runFleetSpawn({
     packageRoot,
     stateDir,
-    apiBase: parseCliFlag(argv, "--api-base") ?? "http://127.0.0.1:8787",
+    apiBase,
     bossTerminalId: parseCliFlag(argv, "--boss-terminal-id"),
     execute: argv.includes("--execute"),
     log: (line) => console.log(line),
@@ -480,8 +572,15 @@ if (isDirectInvocation()) {
           verify: {
             enabled: true,
             blockOnFixes: process.env.OCTOGENT_FLEET_VERIFY_BLOCK_ON_FIXES === "1",
+            produceVerdict: createFleetVerdictProducer({ apiBase, stateDir, timeoutMs }),
             record: (artifact: FleetVerifyArtifact) =>
               appendFleetVerifyArtifact(stateDir, artifact),
+            surface: (artifact: FleetVerifyArtifact, context: FleetVerifyContext) =>
+              surfaceFleetVerifyArtifact({
+                apiBase,
+                parentTerminalId: context.parentTerminalId,
+                artifact,
+              }),
           },
         }
       : {}),
