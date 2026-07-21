@@ -4,6 +4,7 @@ import { FileText, X } from "lucide-react";
 import { buildTerminalSocketUrl } from "../runtime/runtimeEndpoints";
 import { type AgentRuntimeState, AgentStateBadge, isAgentRuntimeState } from "./AgentStateBadge";
 import { TerminalPromptPicker } from "./TerminalPromptPicker";
+import { stripTerminalMouseReports } from "./terminalInput";
 import { replayTerminalHistory } from "./terminalReplay";
 import { wheelDeltaToScrollLines } from "./terminalWheel";
 
@@ -387,15 +388,20 @@ export const Terminal = ({
         requestResizeSyncRef.current = scheduleResizeSync;
 
         const onDataDisposable = terminal.onData((data) => {
+          const keyboardInput = stripTerminalMouseReports(data);
+          if (keyboardInput.length === 0) {
+            return;
+          }
+
           if (!socket || socket.readyState !== 1) {
-            enqueuePendingInput(data);
+            enqueuePendingInput(keyboardInput);
             return;
           }
 
           socket.send(
             JSON.stringify({
               type: "input",
-              data,
+              data: keyboardInput,
             }),
           );
         });

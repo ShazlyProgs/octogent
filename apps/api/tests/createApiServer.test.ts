@@ -2023,6 +2023,162 @@ describe("createApiServer", () => {
     );
   });
 
+  it("registers a tentacle with an input draft without auto-starting a PTY", async () => {
+    spawnMock.mockReset();
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tentacleId: "platform-product-engineer",
+        initialInputDraft: "Resolved profile charter",
+        metadata: {
+          fleetProfileId: "platform-product-engineer",
+          fleetProfileKind: "profile",
+        },
+      }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    expect(spawnMock).not.toHaveBeenCalled();
+    const registryDocument = await waitForRegistryDocument<{
+      terminals: Array<{
+        terminalId: string;
+        initialInputDraft?: string;
+        initialPrompt?: string;
+        metadata?: Record<string, string>;
+      }>;
+    }>(workspaceCwd, (document) => document.terminals.length === 1);
+    expect(registryDocument.terminals[0]).toMatchObject({
+      terminalId: "terminal-1",
+      initialInputDraft: "Resolved profile charter",
+      metadata: {
+        fleetProfileId: "platform-product-engineer",
+        fleetProfileKind: "profile",
+      },
+    });
+    expect(registryDocument.terminals[0]).not.toHaveProperty("initialPrompt");
+  });
+
+  it("starts a registered terminal from its stored draft and rejects a double wake", async () => {
+    spawnMock.mockReset();
+    const pty = new FakePty();
+    spawnMock.mockReturnValue(pty);
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        terminalId: "profile-terminal",
+        tentacleId: "platform-product-engineer",
+        initialInputDraft: "Resolved profile charter",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    const startResponse = await fetch(`${baseUrl}/api/terminals/profile-terminal/start`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(startResponse.status).toBe(200);
+    await expect(startResponse.json()).resolves.toEqual(
+      expect.objectContaining({
+        terminalId: "profile-terminal",
+        agentRuntimeState: "idle",
+      }),
+    );
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(pty.write).toHaveBeenCalledWith("claude\r");
+
+    const registryDocument = await waitForRegistryDocument<{
+      terminals: Array<{ terminalId: string; initialPrompt?: string }>;
+    }>(workspaceCwd, (document) =>
+      document.terminals.some(
+        (terminal) =>
+          terminal.terminalId === "profile-terminal" &&
+          terminal.initialPrompt === "Resolved profile charter",
+      ),
+    );
+    expect(registryDocument.terminals[0]?.initialPrompt).toBe("Resolved profile charter");
+
+    const secondStartResponse = await fetch(`${baseUrl}/api/terminals/profile-terminal/start`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(secondStartResponse.status).toBe(409);
+  });
+
+  it("never starts a bound-service profile as a Claude session", async () => {
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue(new FakePty());
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        terminalId: "sara",
+        tentacleId: "sara",
+        initialInputDraft: "Representation charter",
+        metadata: { fleetProfileKind: "bound-service" },
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const startResponse = await fetch(`${baseUrl}/api/terminals/sara/start`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(startResponse.status).toBe(409);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("stops an active terminal session without deleting its registered record", async () => {
+    spawnMock.mockReset();
+    const pty = new FakePty();
+    spawnMock.mockReturnValue(pty);
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ terminalId: "wakeable", initialPrompt: "Begin work" }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const stopResponse = await fetch(`${baseUrl}/api/terminals/wakeable/stop`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    expect(stopResponse.status).toBe(200);
+    await expect(stopResponse.json()).resolves.toEqual(
+      expect.objectContaining({ terminalId: "wakeable" }),
+    );
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+
+    const snapshotsResponse = await fetch(`${baseUrl}/api/terminal-snapshots`, {
+      headers: { Accept: "application/json" },
+    });
+    const snapshots = (await snapshotsResponse.json()) as Array<Record<string, unknown>>;
+    expect(snapshots).toEqual(
+      expect.arrayContaining([expect.objectContaining({ terminalId: "wakeable" })]),
+    );
+    expect(snapshots.find((snapshot) => snapshot.terminalId === "wakeable")).not.toHaveProperty(
+      "agentRuntimeState",
+    );
+  });
+
   it("creates isolated worktree terminals with dedicated cwd", async () => {
     const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
     temporaryDirectories.push(workspaceCwd);

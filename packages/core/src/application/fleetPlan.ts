@@ -1,12 +1,14 @@
 /**
  * Fleet plan — pure domain logic for the standing C-suite fleet (#45 W-ORCH-NATIVE Phase 1).
  *
- * A fleet manifest declares an org-chart tree of STANDING tentacles (rulings D1/D2:
- * C-suite = standing tentacles, 24/7) plus a policy block for EPHEMERAL specialist
- * worktree subagents (rulings D1/D5). This module validates the manifest and derives
- * a deterministic parent-before-child spawn order. It performs no I/O — staging and
- * API calls live in the api app (ports-and-adapters boundary).
+ * A fleet manifest declares an org-chart tree of standing, dormant-by-default roles,
+ * summon-on-demand profiles, and a policy block for ephemeral specialist worktree
+ * subagents. This module validates the manifest and derives deterministic terminal
+ * create requests. It performs no I/O — staging, prompt resolution, and API calls live
+ * in the api app (ports-and-adapters boundary).
  */
+
+import { type TerminalAgentProvider, isTerminalAgentProvider } from "../domain/agentRuntime";
 
 export const DEFAULT_FLEET_MAX_CHILDREN_PER_PARENT = 9;
 
@@ -27,6 +29,8 @@ export type FleetRoleDefinition = {
   description?: string;
   /** Symbolic path of the canonical persona this role's CONTEXT.md was seeded from. */
   personaSource?: string;
+  /** Engine for this node's sessions (Org v2.1 policy: officers "claude-code", build profiles "codex"). Omitted → runtime default. */
+  agentProvider?: TerminalAgentProvider;
 };
 
 export type FleetSpecialistPolicy = {
@@ -37,10 +41,30 @@ export type FleetSpecialistPolicy = {
   claudeSettingsTemplate?: string;
 };
 
+export type FleetProfileKind = "profile" | "bound-service";
+
+export type FleetProfileDefinition = {
+  /** Stable dormant terminal/tentacle identity. */
+  id: string;
+  /** Human-facing terminal display name. */
+  name: string;
+  /** Owning standing role. Profiles may never parent other profiles. */
+  parentRoleId: string;
+  /** Prompt template resolved by the API-side runner before registration. */
+  promptTemplate: string;
+  /** Repo-relative seed folder copied into runtime state. */
+  seedDir: string;
+  /** Bound services are represented in the UI but are never Claude sessions. */
+  kind: FleetProfileKind;
+  /** Engine used when this profile is woken. Forbidden on bound-service (never a session). */
+  agentProvider?: TerminalAgentProvider;
+};
+
 export type FleetManifest = {
-  version: 1;
+  version: 2;
   fleetId: string;
   roles: FleetRoleDefinition[];
+  profiles: FleetProfileDefinition[];
   specialists?: FleetSpecialistPolicy;
 };
 
@@ -53,6 +77,27 @@ export type FleetSpawnStep = {
   workspaceMode: FleetWorkspaceMode;
   promptTemplate: string;
   description: string;
+  agentProvider?: TerminalAgentProvider;
+};
+
+export type FleetProfileRecordRequest = {
+  profileId: string;
+  kind: FleetProfileKind;
+  requestBody: {
+    name: string;
+    workspaceMode: "shared";
+    tentacleId: string;
+    parentTerminalId: string;
+    initialInputDraft: string;
+    agentProvider?: TerminalAgentProvider;
+    metadata: {
+      fleetId: string;
+      fleetProfileId: string;
+      fleetProfileKind: FleetProfileKind;
+      promptTemplate: string;
+      seedDir: string;
+    };
+  };
 };
 
 export class FleetManifestError extends Error {
@@ -90,6 +135,44 @@ const collectRoleIssues = (role: Record<string, unknown>, label: string): string
   }
   if (!isNonEmptyString(role.promptTemplate)) {
     issues.push(`${label}: "promptTemplate" must be a non-empty string`);
+  }
+  if (role.agentProvider !== undefined && !isTerminalAgentProvider(role.agentProvider)) {
+    issues.push(
+      `${label}: "agentProvider" must be "codex" or "claude-code" when present (got ${JSON.stringify(role.agentProvider)})`,
+    );
+  }
+  return issues;
+};
+
+const collectProfileIssues = (profile: Record<string, unknown>, label: string): string[] => {
+  const issues: string[] = [];
+  if (!isNonEmptyString(profile.id) || !KEBAB_CASE_ID.test(profile.id)) {
+    issues.push(`${label}: "id" must be a kebab-case string (got ${JSON.stringify(profile.id)})`);
+  }
+  if (!isNonEmptyString(profile.name)) {
+    issues.push(`${label}: "name" must be a non-empty string`);
+  }
+  if (!isNonEmptyString(profile.parentRoleId)) {
+    issues.push(`${label}: "parentRoleId" must be a role id`);
+  }
+  if (!isNonEmptyString(profile.promptTemplate)) {
+    issues.push(`${label}: "promptTemplate" must be a non-empty string`);
+  }
+  if (!isNonEmptyString(profile.seedDir)) {
+    issues.push(`${label}: "seedDir" must be a non-empty string`);
+  }
+  if (profile.kind !== "profile" && profile.kind !== "bound-service") {
+    issues.push(`${label}: "kind" must be "profile" or "bound-service"`);
+  }
+  if (profile.agentProvider !== undefined && !isTerminalAgentProvider(profile.agentProvider)) {
+    issues.push(
+      `${label}: "agentProvider" must be "codex" or "claude-code" when present (got ${JSON.stringify(profile.agentProvider)})`,
+    );
+  }
+  if (profile.kind === "bound-service" && profile.agentProvider !== undefined) {
+    issues.push(
+      `${label}: bound-service profiles never run sessions; "agentProvider" is forbidden`,
+    );
   }
   return issues;
 };
@@ -183,8 +266,8 @@ export const parseFleetManifest = (
   if (!isRecord(raw)) {
     throw new FleetManifestError(["manifest must be a JSON object"]);
   }
-  if (raw.version !== 1) {
-    issues.push(`unsupported manifest version ${JSON.stringify(raw.version)} (expected 1)`);
+  if (raw.version !== 2) {
+    issues.push(`unsupported manifest version ${JSON.stringify(raw.version)} (expected 2)`);
   }
   if (!isNonEmptyString(raw.fleetId) || !KEBAB_CASE_ID.test(raw.fleetId)) {
     issues.push(`"fleetId" must be a kebab-case string`);
@@ -217,9 +300,70 @@ export const parseFleetManifest = (
     promptTemplate: role.promptTemplate as string,
     ...(isNonEmptyString(role.description) ? { description: role.description } : {}),
     ...(isNonEmptyString(role.personaSource) ? { personaSource: role.personaSource } : {}),
+    ...(isTerminalAgentProvider(role.agentProvider) ? { agentProvider: role.agentProvider } : {}),
   }));
 
   issues.push(...collectTreeIssues(roles, maxChildren));
+
+  if (!Array.isArray(raw.profiles)) {
+    issues.push(`"profiles" must be an array`);
+  }
+
+  const profileRecords: Record<string, unknown>[] = [];
+  if (Array.isArray(raw.profiles)) {
+    for (const [index, profile] of raw.profiles.entries()) {
+      if (!isRecord(profile)) {
+        issues.push(`profiles[${index}] must be an object`);
+        continue;
+      }
+      const label = isNonEmptyString(profile.id) ? `profile "${profile.id}"` : `profiles[${index}]`;
+      issues.push(...collectProfileIssues(profile, label));
+      profileRecords.push(profile);
+    }
+  }
+
+  const profiles: FleetProfileDefinition[] = profileRecords
+    .filter(
+      (profile) =>
+        isNonEmptyString(profile.id) &&
+        isNonEmptyString(profile.name) &&
+        isNonEmptyString(profile.parentRoleId) &&
+        isNonEmptyString(profile.promptTemplate) &&
+        isNonEmptyString(profile.seedDir) &&
+        (profile.kind === "profile" || profile.kind === "bound-service"),
+    )
+    .map((profile) => ({
+      id: profile.id as string,
+      name: profile.name as string,
+      parentRoleId: profile.parentRoleId as string,
+      promptTemplate: profile.promptTemplate as string,
+      seedDir: profile.seedDir as string,
+      kind: profile.kind as FleetProfileKind,
+      ...(isTerminalAgentProvider(profile.agentProvider)
+        ? { agentProvider: profile.agentProvider }
+        : {}),
+    }));
+
+  const roleIds = new Set(roles.map((role) => role.id));
+  const profileIdCounts = new Map<string, number>();
+  for (const profile of profileRecords) {
+    const profileId = isNonEmptyString(profile.id) ? profile.id : undefined;
+    const parentRoleId = isNonEmptyString(profile.parentRoleId) ? profile.parentRoleId : undefined;
+    if (profileId) {
+      profileIdCounts.set(profileId, (profileIdCounts.get(profileId) ?? 0) + 1);
+    }
+    if (profileId && roleIds.has(profileId)) {
+      issues.push(`profile id "${profileId}" conflicts with a role id`);
+    }
+    if (profileId && parentRoleId && !roleIds.has(parentRoleId)) {
+      issues.push(`profile "${profileId}" references unknown parent role "${parentRoleId}"`);
+    }
+  }
+  for (const [id, count] of profileIdCounts) {
+    if (count > 1) {
+      issues.push(`duplicate profile id "${id}" (${count} occurrences)`);
+    }
+  }
 
   let specialists: FleetSpecialistPolicy | undefined;
   if (raw.specialists !== undefined) {
@@ -254,9 +398,10 @@ export const parseFleetManifest = (
   }
 
   return {
-    version: 1,
+    version: 2,
     fleetId: raw.fleetId as string,
     roles,
+    profiles,
     ...(specialists ? { specialists } : {}),
   };
 };
@@ -285,6 +430,7 @@ export const buildFleetSpawnPlan = (manifest: FleetManifest): FleetSpawnStep[] =
         workspaceMode: role.workspaceMode,
         promptTemplate: role.promptTemplate,
         description: role.description ?? "",
+        ...(role.agentProvider ? { agentProvider: role.agentProvider } : {}),
       });
       next.push(...manifest.roles.filter((candidate) => candidate.parentRoleId === role.id));
     }
@@ -293,3 +439,51 @@ export const buildFleetSpawnPlan = (manifest: FleetManifest): FleetSpawnStep[] =
 
   return steps;
 };
+
+/**
+ * Build register-only terminal create requests for every profile. The API-side caller
+ * resolves prompt templates first and supplies the resulting charters here. Requests
+ * deliberately contain `initialInputDraft`, never `initialPrompt`, so creating the
+ * dormant UI record cannot auto-start a PTY. Bound services receive the same dormant
+ * representation record and are fenced from wake by their persisted metadata.
+ */
+export const buildProfileRecords = (
+  manifest: FleetManifest,
+  options: {
+    parentTerminalIds: Readonly<Record<string, string>>;
+    resolvedCharters: Readonly<Record<string, string>>;
+  },
+): FleetProfileRecordRequest[] =>
+  manifest.profiles.map((profile) => {
+    const parentTerminalId = options.parentTerminalIds[profile.parentRoleId]?.trim();
+    if (!parentTerminalId) {
+      throw new FleetManifestError([
+        `profile "${profile.id}" has no resolved parent terminal for role "${profile.parentRoleId}"`,
+      ]);
+    }
+
+    const initialInputDraft = options.resolvedCharters[profile.id]?.trim();
+    if (!initialInputDraft) {
+      throw new FleetManifestError([`profile "${profile.id}" has no resolved charter`]);
+    }
+
+    return {
+      profileId: profile.id,
+      kind: profile.kind,
+      requestBody: {
+        name: profile.name,
+        workspaceMode: "shared",
+        tentacleId: profile.id,
+        parentTerminalId,
+        initialInputDraft,
+        ...(profile.agentProvider ? { agentProvider: profile.agentProvider } : {}),
+        metadata: {
+          fleetId: manifest.fleetId,
+          fleetProfileId: profile.id,
+          fleetProfileKind: profile.kind,
+          promptTemplate: profile.promptTemplate,
+          seedDir: profile.seedDir,
+        },
+      },
+    };
+  });

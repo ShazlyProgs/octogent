@@ -1,72 +1,126 @@
-# Fleet — standing C-suite skeleton (#45 W-ORCH-NATIVE, Phase 1)
+# Fleet canon v2 — Org v2.1
 
-> Authority: `$VAULT/40-Plans/Active/2026-06-30-W-ORCH-NATIVE-architecture-decision-doc.md` §8 (the 10 Mohamed rulings) + `2026-06-30-W-ORCH-NATIVE-build-plan.md` Phase 1. Built 2026-07-04 on branch `feat/45-phase1` (MASTER-LIST r92).
+> Authority: Mohamed-direct, 2026-07-21. Org v2.1 ratified; build authorized. The fleet is standing but dormant-by-default. Stand-up, restart, rollout, service mutation, commit, and push remain operator-gated.
 
-This directory is the **in-repo skeleton** of the octogent-native standing fleet that replaces the legacy `:3001` delegation engine. It contains everything needed to stand the fleet up, but standing it up is an **operator-gated action** — the spawn runner is dry-run by default.
+This directory is the in-repo contract for the octogent-native fleet. A standing identity has a durable seed, registered terminal record, and parent edge; it does not consume a Claude session while dormant. Wake is explicit and bounded.
 
-## What's here
+## Ratified graph — 22-node context
 
-| Path | What |
-|---|---|
-| `fleet.json` | Fleet manifest: org-chart tree of 7 standing roles (CEO root + 6 C-suite children) + the ephemeral-specialist policy. Validated by `@octogent/core` `parseFleetManifest()`. |
-| `tentacles/<role>/` | Seed folders (CONTEXT.md + todo.md + memory.md) staged into `$STATE/tentacles/<role>/` at spawn. CONTEXT.md is the canonical persona home going forward (seeded from the legacy `$AGENTS/agents/*.md` personas; decision doc §3). |
-| `worktree-claude-settings.json` | **[D5] git-deny parity template** staged into each ephemeral specialist worktree's `.claude/settings.json`. |
-| `../prompts/csuite-agent-init.md` | Boot prompt template for the standing roles. |
-| `../packages/core/src/application/fleetPlan.ts` | Pure manifest validation + parent-before-child spawn ordering (tests in `packages/core/tests/fleetPlan.test.ts`). |
-| `../apps/api/src/fleetSpawn.ts` | The spawn runner (tests in `apps/api/tests/fleetSpawn.test.ts`). |
-| `BACKOFFICE-TOOLS.md` | **[Phase 2]** the fleet's `:3001` back-office "tools" seam — curated registry (`packages/core/src/application/backOfficeTools.ts`) + HTTP client (`apps/api/src/backOfficeClient.ts`) + `octogent backoffice` CLI. The fleet consumes CRM + Sara voice as TOOLS; the retiring engine tools are deliberately excluded. |
-| `CHAT-PARITY.md` | **[Phase 3 m1]** the dashboard-Chat supersede contract ([D9]) — the parity matrix (`packages/core/src/application/chatParity.ts`) mapping every legacy `routes/conversations.ts` capability to native/adapter/drop, plus the machine-checkable "no hard cut" retire gate + `octogent chat-parity` CLI. Grounds WHAT parity means before the chat is wired. |
+The executable manifest contains 11 standing roles and five profiles. Six out-of-repo VaultAgent deck-mirror records are shown for organizational context only, bringing the published view to 22 nodes. Representation records are not runner inputs.
 
-## Rulings → implementation map (decision doc §8)
-
-| # | Ruling | Where implemented |
-|---|---|---|
-| D1 | C-suite standing tentacles; specialists ephemeral worktree subagents | `fleet.json` roles (`shared`) + `specialists` policy (`worktree`, ephemeral) |
-| D2 | ALL C-suite live 24/7 | Standing roles spawned once by the runner; no auto-retire |
-| D3 | Per-tentacle files + shared vault memory dir; SQLite read-only history | Each seed's `memory.md` + CONTEXT § Memory; `$VAULT/.shazly/shared-memory/` read; `shazly.db` read-only |
-| D4 | Adversarial-verify per task, no old scoring engine | `csuite-agent-init.md` § Delegation model + CTO/GE CONTEXT recipes |
-| D5 | Octogent native worktree mode + verify git-deny parity | **Verified: NO native deny exists** (see below) → `worktree-claude-settings.json` + staging step in the recipes |
-| D6 | Independent fleet per machine, vault git ferries | `fleet.json` comment + prompt standing order #6 |
-| D8 | Tentacles are native Claude Code sessions | Octogent terminals ARE Claude Code sessions; no `claude-client.ts` in the loop |
-| D9 | Chat supersede (build parity first, no hard cut) | Phase 3 m1: parity contract + retire gate — `chatParity.ts` + `CHAT-PARITY.md` + `octogent chat-parity`. Chat wiring + dashboard-Chat retirement are later milestones / Phase 4. |
-| D10 | Briefings retire | Phase 4, NOT built yet |
-
-## [D5] git-deny parity — verification result (2026-07-04)
-
-**Octogent's native worktree mode has NO hard git deny.** Verified at Phase-1 build time:
-
-- `apps/api/src/terminalRuntime/worktreeManager.ts` — creates/removes worktrees + branches only; no permission scoping.
-- `apps/api/src/terminalRuntime/ptyEnvironment.ts` — passes the full parent env; injects no deny config.
-- `apps/api/src/terminalRuntime/gitOperations.ts:168` — even exposes an operator-side `pushTentacleWorktree()` (dashboard action, not agent-invoked).
-- Protection today is prompt-level only (`tentacle-spawn.md` standing orders + PLAYBOOK §3).
-
-The legacy engine enforced a hard deny via `$ORCHESTRATION/server/permission-scoping.ts` `buildDenyList()`. **Parity closure here:** `worktree-claude-settings.json` carries that deny set — destructive git (push/reset/checkout/merge/rebase/clean/cherry-pick/stash/tag/`branch -D`), destructive filesystem (`rm -rf`/`-r`/`-f`), network egress (`curl`/`wget`), `sudo`, and secret-file reads/writes (`.env*`, `credentials*`, `*_key*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`) — with ONE deliberate delta: `git commit` stays ALLOWED because octogent-native workers commit per logical unit on their own `octogent/<terminalId>` branch (the old engine committed on the worker's behalf). (Octogent adds the `Tool(spec:*)` variant form alongside legacy's `Tool(spec *)` for defense in depth; legacy's tenant-scoped `data/**` denies are N/A here — the fleet's shared workspace is the vault, not a per-tenant data dir.)
-
-**Known limitation (residual):** the settings file can only be staged AFTER the terminal (and its worktree) is created, so there is a small race before the child's first edit. The C-suite recipes mitigate (stage immediately, pause the child if needed). Hard closures — checking a `.claude/settings.json` into the mono-repo root at `$REPOS`, or octogent runtime support for pre-seeding worktree files — are follow-ups outside this repo's Phase-1 fence.
-
-## Standing the fleet up (operator-gated — VaultAgent/Mohamed)
-
-Prereqs: octogent daemon running at `:8787` (`/api/terminal-snapshots` returns 200); this machine's live fleet has capacity (7 new terminals; CEO takes 6 children of the 9-cap).
-
-```bash
-# from the octogent repo root
-pnpm fleet:spawn                    # DRY-RUN: prints stage/deck/spawn plan, changes nothing
-pnpm fleet:spawn -- --execute       # stages seeds -> registers tentacles -> spawns parent-before-child
-pnpm fleet:spawn -- --execute --boss-terminal-id <shazly-terminal-id>   # optionally hang the CEO under ShazlyAgent
+```text
+fleet-ceo (root; standing)
+├─ fleet-cos (standing)
+├─ fleet-platform-tl (standing)
+│  ├─ fleet-cto (standing)
+│  │  ├─ platform-product-engineer (profile; summon on demand)
+│  │  └─ platform-operations-engineer (profile; summon on demand)
+│  └─ fleet-cpo (standing)
+├─ fleet-cfo (standing)
+├─ fleet-ciso (standing)
+├─ fleet-clo (standing)
+├─ fleet-cmo (standing)
+│  ├─ growth-operations (profile; summon on demand)
+│  └─ sara (bound-service profile; never a Claude session)
+├─ fleet-customer-success (standing)
+├─ fleet-general-engineer (standing)
+│  └─ client-delivery (profile; summon on demand)
+└─ vault-agent (representation; out of repo)
+   ├─ concierge (representation; out of repo)
+   ├─ codex-build (representation; out of repo)
+   ├─ data-room (representation; out of repo)
+   ├─ platform-ui (representation; out of repo)
+   └─ data-collection-kit (representation; out of repo)
 ```
 
-The runner: (1) copies `fleet/tentacles/<id>/` → `$STATE/tentacles/<id>/` (existing folders left untouched), (2) POSTs `/api/deck/tentacles` per role ("already exists" tolerated), (3) POSTs `/api/terminals` in plan order, threading each parent's returned `terminalId` into its children's spawn + prompt variables.
+Parent mapping, stated without shorthand:
 
-Default `$STATE` = `<repo>/../../.octogent` per REPOS.md; override with `--state-dir`.
+| Slug | Parent | Class | Runner behavior |
+|---|---|---|---|
+| `fleet-ceo` | none | standing role | roles-only plan; persistent identity |
+| `fleet-cos` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-platform-tl` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-cfo` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-ciso` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-clo` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-cmo` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-customer-success` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-general-engineer` | `fleet-ceo` | standing role | roles-only plan; dormant-by-default |
+| `fleet-cto` | `fleet-platform-tl` | standing role | roles-only plan; dormant-by-default |
+| `fleet-cpo` | `fleet-platform-tl` | standing role | roles-only plan; dormant-by-default |
+| `platform-product-engineer` | `fleet-cto` | profile | registered dormant record; wake on demand |
+| `platform-operations-engineer` | `fleet-cto` | profile | registered dormant record; wake on demand |
+| `client-delivery` | `fleet-general-engineer` | profile | registered dormant record; wake on demand |
+| `growth-operations` | `fleet-cmo` | profile | registered dormant record; wake on demand |
+| `sara` | `fleet-cmo` | bound service | registered representation only; never wake/spawn |
+| `vault-agent` | `fleet-ceo` | representation | deck mirror only; never spawned by this runner |
+| `concierge` | `vault-agent` | representation | deck mirror only; never spawned by this runner |
+| `codex-build` | `vault-agent` | representation | deck mirror only; never spawned by this runner |
+| `data-room` | `vault-agent` | representation | deck mirror only; never spawned by this runner |
+| `platform-ui` | `vault-agent` | representation | deck mirror only; never spawned by this runner |
+| `data-collection-kit` | `vault-agent` | representation | deck mirror only; never spawned by this runner |
 
-**Note (dev-mode template loading, PLAYBOOK §13):** if the daemon was running before `prompts/csuite-agent-init.md` landed, restart octogent once (or copy the template into `dist/prompts/`) so the template resolves.
+`finance-pipeline` is the CFO's inherited operating system, not a manifest/profile node. Its living STATE and August queue are pointers in the CFO seed. Hifini was dropped by Mohamed's ruling. The 17 archived legacy roles and their historical rows are not manifest nodes. The VaultAgent branch remains an external runtime/deck mirror: `fleet/tentacles/vaultagent/` documents the representation, but `vaultagent` is never spawnable by `fleetSpawn.ts`.
 
-## Phase-1 verification (after stand-up)
+## Manifest v2 contract
 
-Mohamed prompts the CEO terminal → CEO delegates to one C-suite child via channel → the child runs the specialist spawn recipe (incl. the [D5] staging + a `git push --dry-run` denial probe) → result returns up the tree → CEO summarizes to Mohamed. Each tentacle's `todo.md` carries its leg of this chain.
+`fleet.json` version 2 has two identity sections:
 
-## What Phase 1 deliberately does NOT do
+- `roles[]`: the 11 standing org-tree roles. `buildFleetSpawnPlan()` remains roles-only and validates the single rooted tree plus the native child cap.
+- `profiles[]`: `id`, `name`, owning `parentRoleId`, `promptTemplate`, `seedDir`, and `kind`. A profile parent must be a role. `buildProfileRecords()` produces parent-linked, register-only terminal create requests using a resolved charter as `initialInputDraft`; it never emits `initialPrompt`. `bound-service` metadata prevents wake.
 
-- No `:3001` code changes (excision is Phase 4; back-office services stay live and untouched).
-- No Chat *wiring* — Phase 3 m1 landed the parity CONTRACT + retire gate only (`CHAT-PARITY.md`); the interactive octogent chat is later Phase 3 milestones. No briefings retirement (Phase 4), no A5 autonomous loop (Phase 6).
-- No live spawn was executed at build time — the fleet perturbs the live dashboard fleet and is operator-gated.
+The existing `specialists` policy remains for temporary work-shaped subagents in isolated worktrees. Profiles are durable summon identities; ephemeral specialists are disposable execution units. Neither category restores the archived RAG-era standing roster.
+
+### Engine policy (`agentProvider`, Mohamed-ruled 2026-07-21)
+
+Every role and profile may declare `agentProvider: "claude-code" | "codex"`, carried into the terminal record at spawn/registration and honored on every wake. The ratified default: all 11 standing officers run `claude-code` (judgment work); the 4 summon build profiles default to `codex`; `sara` declares nothing because a bound-service never runs a session (the parser rejects a provider there). GLM remains a delegation lane, never a per-node provider. Flip a node by editing its one manifest line and re-registering.
+
+## Wake lifecycle
+
+Before every wake, read `GET /api/terminal-snapshots`. A registered record with no `agentRuntimeState` is dormant.
+
+```text
+POST /api/terminals/<terminalId>/start
+optional body: {"prompt":"bounded assignment"}
+
+POST /api/terminals/<terminalId>/stop
+```
+
+Start preserves the record and tree edge, rejects an already-running record with `409`, and otherwise submits the supplied prompt or stored `initialInputDraft`. Stop gracefully ends the active PTY without deleting the terminal record. Creating a record with `tentacleId`/`initialInputDraft` and no `initialPrompt` is register-only. `sara` cannot start because its persisted `fleetProfileKind` is `bound-service`.
+
+## Concurrency law
+
+- Soft ceiling: 8 active Claude sessions machine-wide; hard ceiling: 10 across both octogent ports and interactive Claude work.
+- Count active Claude sessions, not dormant records, Sara, Codex, or GLM processes.
+- One summoned Claude child per officer by default. CEO owns priority and the global queue.
+- Reserve recovery capacity for CEO and VaultAgent/interactive work; serialize singleton deploy/box work.
+- A wake beyond the hard ceiling is queued and disclosed, never silently started.
+
+## Files
+
+| Path | Purpose |
+|---|---|
+| `fleet.json` | Version-2 role/profile contract |
+| `tentacles/<id>/` | Canonical `CONTEXT.md`, `todo.md`, and `memory.md` seeds for standing roles and the four Claude profiles |
+| `tentacles/vaultagent/` | Representation documentation only; never runner-spawnable |
+| `worktree-claude-settings.json` | D5 deny template for ephemeral specialist worktrees |
+| `../prompts/csuite-agent-init.md` | Dormant/wake, summon-profile, and concurrency doctrine |
+| `../packages/core/src/application/fleetPlan.ts` | Pure manifest validation and create-plan builders |
+| `../apps/api/src/fleetSpawn.ts` | Dry-run-by-default, operator-gated role runner |
+
+Sara deliberately has no Claude seed folder: her manifest record is a bound-service representation and roster changes must never reprovision the live service.
+
+## Operator gate and verification
+
+The runner remains dry-run by default and must not be pointed at a live daemon as part of a build/test lane.
+
+```bash
+pnpm fleet:spawn
+pnpm fleet:spawn -- --execute
+```
+
+Build lanes may validate the manifest, requests, seeds, API routes, and tests. Restart/rollout, live wake, live stop, profile registration, cutover, commit, and push are separate operator actions.
+
+## Worktree deny parity
+
+Ephemeral specialist worktrees still receive `fleet/worktree-claude-settings.json`. It denies destructive git/filesystem operations, network shell egress, privilege escalation, and secret-file reads/writes while allowing logical-unit commits. The settings file is staged immediately after worktree creation; the known pre-seed race remains an infrastructure limitation and does not authorize early edits.

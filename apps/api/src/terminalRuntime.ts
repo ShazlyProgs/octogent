@@ -368,6 +368,7 @@ export const createTerminalRuntime = ({
       createdAt: terminal.createdAt,
       hasUserPrompt: isTerminalRecentlyActive(terminal),
       ...(terminal.parentTerminalId ? { parentTerminalId: terminal.parentTerminalId } : {}),
+      ...(terminal.metadata ? { metadata: { ...terminal.metadata } } : {}),
       ...(session ? { agentRuntimeState: session.agentState } : {}),
     };
   };
@@ -420,6 +421,7 @@ export const createTerminalRuntime = ({
     parentTerminalId,
     nameOrigin,
     autoRenamePromptContext,
+    metadata,
     cwdScope: requestedCwdScope,
   }: {
     terminalId?: string;
@@ -434,6 +436,7 @@ export const createTerminalRuntime = ({
     parentTerminalId?: string;
     nameOrigin?: TerminalNameOrigin;
     autoRenamePromptContext?: string;
+    metadata?: Record<string, string>;
     cwdScope?: "vault";
   }): TerminalSnapshot => {
     // Enforce max children per parent.
@@ -483,6 +486,7 @@ export const createTerminalRuntime = ({
       ...(initialInputDraft ? { initialInputDraft } : {}),
       ...(initialPrompt ? { lastActiveAt: new Date().toISOString() } : {}),
       ...(parentTerminalId ? { parentTerminalId } : {}),
+      ...(metadata ? { metadata: { ...metadata } } : {}),
       ...(resolvedCwdScope ? { cwdScope: resolvedCwdScope } : {}),
     };
 
@@ -900,6 +904,61 @@ export const createTerminalRuntime = ({
     ...gitOps,
 
     createTerminal,
+
+    startTerminal(terminalId: string, prompt?: string): TerminalSnapshot | null {
+      const terminal = terminals.get(terminalId);
+      if (!terminal) {
+        return null;
+      }
+      if (sessions.has(terminalId)) {
+        throw new RuntimeInputError(`Terminal "${terminalId}" is already running.`);
+      }
+      if (terminal.metadata?.fleetProfileKind === "bound-service") {
+        throw new RuntimeInputError(
+          `Terminal "${terminalId}" represents a bound service and cannot start a Claude session.`,
+        );
+      }
+
+      const initialPrompt = prompt?.trim() || terminal.initialInputDraft?.trim();
+      if (!initialPrompt) {
+        throw new RuntimeInputError(
+          `Terminal "${terminalId}" has no prompt. Supply {"prompt":"..."} or register an initialInputDraft.`,
+        );
+      }
+
+      const previousInitialPrompt = terminal.initialPrompt;
+      terminal.initialPrompt = initialPrompt;
+      if (!sessionRuntime.startSession(terminalId)) {
+        if (previousInitialPrompt) {
+          terminal.initialPrompt = previousInitialPrompt;
+        } else {
+          Reflect.deleteProperty(terminal, "initialPrompt");
+        }
+        throw new RuntimeInputError(`Terminal "${terminalId}" could not start a session.`);
+      }
+      terminal.lastActiveAt = new Date().toISOString();
+      persistRegistry();
+      broadcastTerminalEvent({
+        type: "terminal-updated",
+        snapshot: toTerminalSnapshot(terminal),
+      });
+      return toTerminalSnapshot(terminal);
+    },
+
+    stopTerminal(terminalId: string): TerminalSnapshot | null {
+      const terminal = terminals.get(terminalId);
+      if (!terminal) {
+        return null;
+      }
+      if (!sessionRuntime.closeSession(terminalId)) {
+        throw new RuntimeInputError(`Terminal "${terminalId}" is not running.`);
+      }
+      broadcastTerminalEvent({
+        type: "terminal-updated",
+        snapshot: toTerminalSnapshot(terminal),
+      });
+      return toTerminalSnapshot(terminal);
+    },
 
     renameTerminal(terminalId: string, tentacleName: string): TerminalSnapshot | null {
       const terminal = terminals.get(terminalId);

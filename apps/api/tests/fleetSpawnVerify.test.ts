@@ -10,7 +10,7 @@ import {
 
 const manifest = () =>
   parseFleetManifest({
-    version: 1,
+    version: 2,
     fleetId: "csuite",
     roles: [
       {
@@ -30,6 +30,7 @@ const manifest = () =>
         description: "Tech",
       },
     ],
+    profiles: [],
   });
 
 const spawned = () =>

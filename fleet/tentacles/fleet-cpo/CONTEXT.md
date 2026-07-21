@@ -100,7 +100,7 @@ Per-tentacle `memory.md` here; shared `$VAULT/.shazly/shared-memory/` is read-on
 
 ## Escalation rules
 
-Gate failures, missing-capability candidates, scope changes, dependency conflicts, and quarantines → `fleet-ceo`. Pricing, launch/deploy timing, tenant commitments, legal/consent, M-3, and GAP-083 mint/start choices → NEEDS_HUMAN.
+Gate failures, missing-capability candidates, scope changes, dependency conflicts, and quarantines → `fleet-platform-tl`. Pricing, launch/deploy timing, tenant commitments, legal/consent, M-3, and GAP-083 mint/start choices → NEEDS_HUMAN.
 
 ## Commit convention
 

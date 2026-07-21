@@ -107,6 +107,8 @@ export type PersistedTerminal = {
   initialInputDraft?: string;
   lastActiveAt?: string;
   parentTerminalId?: string;
+  /** String-only durable metadata for registered profile/service identities. */
+  metadata?: Record<string, string>;
   /**
    * Optional cwd scope override for the spawned Claude process.
    * "vault" → cwd = detected vault root (restores auto-memory + claude-mem

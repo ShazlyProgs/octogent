@@ -13,5 +13,6 @@ export type TerminalSnapshot = {
   createdAt: string;
   hasUserPrompt?: boolean;
   parentTerminalId?: string;
+  metadata?: Record<string, string>;
   agentRuntimeState?: AgentRuntimeState;
 };

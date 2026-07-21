@@ -115,6 +115,7 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       initialInputDraft?: string;
       autoRenamePromptContext?: string;
       parentTerminalId?: string;
+      metadata?: Record<string, string>;
       cwdScope?: "vault";
     } = {
       workspaceMode: workspaceModeResult.workspaceMode,
@@ -166,6 +167,13 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       bodyPayload.worktreeId.trim().length > 0
     ) {
       createTerminalInput.worktreeId = bodyPayload.worktreeId.trim();
+    }
+    if (bodyPayload?.metadata && typeof bodyPayload.metadata === "object") {
+      createTerminalInput.metadata = Object.fromEntries(
+        Object.entries(bodyPayload.metadata as Record<string, unknown>)
+          .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+          .map(([key, value]) => [key, value.trim()]),
+      );
     }
 
     // Support prompt resolution via template name + variables, or a raw string.
@@ -236,7 +244,19 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
       createTerminalInput.initialPrompt = bodyPayload.initialPrompt.trim();
     }
 
-    if (!createTerminalInput.initialPrompt && createTerminalInput.tentacleId) {
+    if (
+      bodyPayload &&
+      typeof bodyPayload.initialInputDraft === "string" &&
+      bodyPayload.initialInputDraft.trim().length > 0
+    ) {
+      createTerminalInput.initialInputDraft = bodyPayload.initialInputDraft.trim();
+    }
+
+    if (
+      !createTerminalInput.initialPrompt &&
+      !createTerminalInput.initialInputDraft &&
+      createTerminalInput.tentacleId
+    ) {
       const defaultTentaclePrompt = await buildTentacleInitialPrompt(
         promptsDir,
         workspaceCwd,
@@ -266,6 +286,70 @@ export const handleTerminalsCollectionRoute: ApiRouteHandler = async (
 };
 
 const TERMINAL_ITEM_PATH_PATTERN = /^\/api\/terminals\/([^/]+)$/;
+const TERMINAL_LIFECYCLE_PATH_PATTERN = /^\/api\/terminals\/([^/]+)\/(start|stop)$/;
+
+export const handleTerminalLifecycleRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const actionMatch = requestUrl.pathname.match(TERMINAL_LIFECYCLE_PATH_PATTERN);
+  if (!actionMatch) {
+    return false;
+  }
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+
+  const terminalId = decodeURIComponent(actionMatch[1] ?? "");
+  const action = actionMatch[2];
+  let prompt: string | undefined;
+  if (action === "start") {
+    const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+    if (!bodyReadResult.ok) {
+      return true;
+    }
+    if (bodyReadResult.payload !== null) {
+      const payload = bodyReadResult.payload as Record<string, unknown>;
+      const promptValue = payload.prompt;
+      if (
+        typeof bodyReadResult.payload !== "object" ||
+        Array.isArray(bodyReadResult.payload) ||
+        !("prompt" in bodyReadResult.payload) ||
+        typeof promptValue !== "string" ||
+        !promptValue.trim()
+      ) {
+        writeJson(
+          response,
+          400,
+          { error: 'Body must be {"prompt":"..."} when provided.' },
+          corsOrigin,
+        );
+        return true;
+      }
+      prompt = promptValue.trim();
+    }
+  }
+
+  try {
+    const snapshot =
+      action === "start"
+        ? runtime.startTerminal(terminalId, prompt)
+        : runtime.stopTerminal(terminalId);
+    if (!snapshot) {
+      writeJson(response, 404, { error: "Terminal not found." }, corsOrigin);
+      return true;
+    }
+    writeJson(response, 200, snapshot, corsOrigin);
+    return true;
+  } catch (error) {
+    if (error instanceof RuntimeInputError) {
+      writeJson(response, 409, { error: error.message }, corsOrigin);
+      return true;
+    }
+    throw error;
+  }
+};
 
 export const handleTerminalItemRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },

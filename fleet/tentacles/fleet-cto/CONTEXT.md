@@ -45,11 +45,9 @@ Collega codebases resolved through `$OCTOGENT/REPOS.md`. Never hardcode or assum
 
 Analyze actual code → define one bounded unit with acceptance criteria → select the right lane/specialist → require tests and a durable REPORT → audit adversarially → synthesize to CEO. Parallelize only disjoint work without data dependencies.
 
-### Specialist domains
+### Owned profiles and specialist domains
 
-`product-architect` · `ingestion-engineer` · `retrieval-engineer` · `generation-engineer` · `enrichment-engineer` · `testing-engineer` · `validation-analyst` · `security-engineer` · `devops-engineer` · `performance-engineer` · `research-analyst`
-
-Route unknown boundaries to product architecture; include testing for code changes, security for auth/dependency/data changes, and validation before release or claims.
+Durable dormant profiles: `platform-product-engineer` and `platform-operations-engineer`. Wake them for bounded product or release/operations units. Architecture, backend/data/RAG, frontend/desktop, connector/billing, QA/validation, security, and performance remain temporary work-shaped specialists or independent reviewers, not restored standing roles.
 
 ### Lane ops (VAULTAGENT-DOCTRINE §4 — inherited verbatim)
 
@@ -106,7 +104,7 @@ Per-tentacle `memory.md` here; shared `$VAULT/.shazly/shared-memory/` is read-on
 
 ## Escalation rules
 
-Send BLOCKED / DEVIATION / NEEDS_HUMAN to `fleet-ceo`. Escalate new dependencies, breaking contracts, migration needs, deploy/production action, M-3/residency choices, scope crossings, and unresolved evidence disputes.
+Send BLOCKED / DEVIATION / NEEDS_HUMAN to `fleet-platform-tl`. Escalate new dependencies, breaking contracts, migration needs, deploy/production action, M-3/residency choices, scope crossings, and unresolved evidence disputes.
 
 ## Commit convention
 

@@ -2,7 +2,7 @@
  * Fleet spawn runner (#45 W-ORCH-NATIVE Phase 1).
  *
  * Stages the C-suite tentacle seeds from <octogent>/fleet/tentacles/ into the project
- * state dir, registers each tentacle, and spawns the standing terminals in
+ * state dir, starts the CEO, and registers dormant standing roles and profiles in
  * parent-before-child order against a RUNNING octogent daemon.
  *
  * DRY-RUN BY DEFAULT — pass --execute to act. Standing the fleet up is an
@@ -24,14 +24,17 @@ import { dirname, join, resolve } from "node:path";
 
 import {
   type FleetManifest,
+  type TerminalAgentProvider,
   type VerdictProducer,
   type VerifyGateDecision,
   type VerifyVerdict,
   type WorkProductDescriptor,
   buildFleetSpawnPlan,
+  buildProfileRecords,
   parseFleetManifest,
   runAutoVerify,
 } from "@octogent/core";
+import { resolvePrompt } from "./prompts";
 
 export type FleetStageAction = {
   roleId: string;
@@ -55,6 +58,7 @@ export type FleetTerminalRequest = {
     promptTemplate: string;
     promptVariables: Record<string, string>;
     parentTerminalId?: string;
+    agentProvider?: TerminalAgentProvider;
   };
 };
 
@@ -73,21 +77,42 @@ export const buildStageActions = (
   manifest: FleetManifest,
   options: { packageRoot: string; stateDir: string; targetExists: (path: string) => boolean },
 ): FleetStageAction[] =>
-  manifest.roles.map((role) => {
-    const targetDir = join(options.stateDir, "tentacles", role.id);
+  [
+    ...manifest.roles.map((role) => ({
+      id: role.id,
+      seedDir: join("fleet", "tentacles", role.id),
+    })),
+    ...manifest.profiles
+      .filter((profile) => profile.kind === "profile")
+      .map((profile) => ({ id: profile.id, seedDir: profile.seedDir })),
+  ].map((identity) => {
+    const targetDir = join(options.stateDir, "tentacles", identity.id);
     return {
-      roleId: role.id,
-      sourceDir: join(options.packageRoot, "fleet", "tentacles", role.id),
+      roleId: identity.id,
+      sourceDir: join(options.packageRoot, identity.seedDir),
       targetDir,
       shouldCopy: !options.targetExists(targetDir),
     };
   });
 
-export const buildTentacleRegistrations = (manifest: FleetManifest): FleetTentacleRegistration[] =>
-  manifest.roles.map((role) => ({
+export const buildTentacleRegistrations = (
+  manifest: FleetManifest,
+): FleetTentacleRegistration[] => [
+  ...manifest.roles.map((role) => ({
     roleId: role.id,
     requestBody: { name: role.id, description: role.description ?? "" },
-  }));
+  })),
+  ...manifest.profiles.map((profile) => ({
+    roleId: profile.id,
+    requestBody: {
+      name: profile.id,
+      description:
+        profile.kind === "bound-service"
+          ? `${profile.name}: bound-service representation; never a Claude session.`
+          : `${profile.name}: dormant summon-on-demand profile.`,
+    },
+  })),
+];
 
 /**
  * Build the POST /api/terminals bodies in spawn-plan order. The parent terminal id of
@@ -118,6 +143,7 @@ export const buildTerminalRequests = (
         tentacleId: step.roleId,
         promptTemplate: step.promptTemplate,
         promptVariables,
+        ...(step.agentProvider ? { agentProvider: step.agentProvider } : {}),
       },
     };
   });
@@ -178,13 +204,13 @@ export const buildFleetSpawnVerifyDescriptor = (
     .map((role) => role.id);
   return {
     title: `fleet "${manifest.fleetId}" standing spawn`,
-    claim: `The fleet spawn stood up ${roleIds.length} standing C-suite tentacle(s) parent-before-child, each registered on the deck and given a live terminal id, with no orphaned child.`,
+    claim: `The fleet runner created ${roleIds.length} standing C-suite terminal identities parent-before-child, with the root live and officers registered dormant, each on the deck with no orphaned child.`,
     scope:
       "fleet spawn only — the standing C-suite tentacles declared in fleet.json; NOT specialist worktrees and NO back-office mutation.",
     evidence: roleIds.map((roleId) => ({
       kind: "terminal",
       reference: `${roleId} -> ${spawned.get(roleId) ?? "(missing)"}`,
-      detail: "spawned terminal id",
+      detail: "registered terminal id",
     })),
     context: `#45 W-ORCH-NATIVE Phase 2 [D4] auto-verify hook. fleet.json declares ${manifest.roles.length} role(s); expected root(s): ${expectedRoots.join(", ") || "(none)"}.`,
   };
@@ -303,10 +329,11 @@ export const runFleetSpawn = async (options: ExecuteOptions): Promise<void> => {
     stateDir,
     bossTerminalId: options.bossTerminalId,
   })) {
-    const body = {
+    let body: Record<string, unknown> = {
       ...request.requestBody,
       promptVariables: { ...request.requestBody.promptVariables },
     };
+    const promptVariables = body.promptVariables as Record<string, string>;
     if (request.parentRoleId !== null) {
       const parentTerminalId = terminalIdsByRole.get(request.parentRoleId);
       if (execute && !parentTerminalId) {
@@ -315,12 +342,42 @@ export const runFleetSpawn = async (options: ExecuteOptions): Promise<void> => {
         );
       }
       body.parentTerminalId = parentTerminalId ?? `<terminal of ${request.parentRoleId}>`;
-      body.promptVariables.parentTerminalId = body.parentTerminalId;
+      promptVariables.parentTerminalId = String(body.parentTerminalId);
     } else if (options.bossTerminalId) {
       body.parentTerminalId = options.bossTerminalId;
     }
+
+    let action = "spawn";
+    if (request.parentRoleId !== null) {
+      const initialInputDraft = await resolvePrompt(
+        join(packageRoot, "prompts"),
+        request.requestBody.promptTemplate,
+        promptVariables,
+      );
+      if (!initialInputDraft) {
+        throw new Error(
+          `Unable to resolve dormant role charter "${request.requestBody.promptTemplate}" for "${request.roleId}"`,
+        );
+      }
+      body = {
+        name: request.requestBody.name,
+        workspaceMode: request.requestBody.workspaceMode,
+        tentacleId: request.requestBody.tentacleId,
+        parentTerminalId: body.parentTerminalId,
+        initialInputDraft,
+        ...(request.requestBody.agentProvider
+          ? { agentProvider: request.requestBody.agentProvider }
+          : {}),
+        metadata: {
+          fleetId: manifest.fleetId,
+          fleetRoleId: request.roleId,
+          fleetRoleState: "standing-dormant",
+        },
+      };
+      action = "record";
+    }
     log(
-      `spawn  ${request.roleId}: POST /api/terminals (parent=${body.parentTerminalId ?? "none"})`,
+      `${action.padEnd(6)} ${request.roleId}: POST /api/terminals (parent=${String(body.parentTerminalId ?? "none")})`,
     );
     if (!execute) continue;
     const result = await postJson(`${apiBase}/api/terminals`, body);
@@ -331,10 +388,54 @@ export const runFleetSpawn = async (options: ExecuteOptions): Promise<void> => {
     }
     const terminalId = String(result.payload.terminalId ?? "");
     terminalIdsByRole.set(request.roleId, terminalId);
-    log(`spawn  ${request.roleId}: terminal "${terminalId}" created`);
+    log(`${action.padEnd(6)} ${request.roleId}: terminal "${terminalId}" created`);
   }
 
-  // 4. D4 auto-verify hook (config-gated) — audit the spawn as a work product and
+  // 4. Create parent-linked profile records without initialPrompt. These records are
+  // visible but dormant; bound-service metadata also prevents later wake.
+  const parentTerminalIds = Object.fromEntries(
+    manifest.roles.map((role) => [
+      role.id,
+      terminalIdsByRole.get(role.id) ?? `<terminal of ${role.id}>`,
+    ]),
+  );
+  const resolvedCharters: Record<string, string> = {};
+  for (const profile of manifest.profiles) {
+    const charter = await resolvePrompt(join(packageRoot, "prompts"), profile.promptTemplate, {
+      roleName: profile.name,
+      roleId: profile.id,
+      fleetId: manifest.fleetId,
+      parentTerminalId: parentTerminalIds[profile.parentRoleId] ?? "",
+      tentacleContextPath: join(stateDir, "tentacles", profile.id),
+    });
+    if (!charter) {
+      throw new Error(
+        `Unable to resolve profile charter "${profile.promptTemplate}" for "${profile.id}"`,
+      );
+    }
+    resolvedCharters[profile.id] = charter;
+  }
+
+  for (const profileRecord of buildProfileRecords(manifest, {
+    parentTerminalIds,
+    resolvedCharters,
+  })) {
+    log(
+      `record ${profileRecord.profileId}: POST /api/terminals (parent=${profileRecord.requestBody.parentTerminalId}, kind=${profileRecord.kind})`,
+    );
+    if (!execute) continue;
+    const result = await postJson(`${apiBase}/api/terminals`, profileRecord.requestBody);
+    if (!result.ok) {
+      throw new Error(
+        `Failed to register profile "${profileRecord.profileId}": ${String(result.payload.error ?? result.status)}`,
+      );
+    }
+    log(
+      `record ${profileRecord.profileId}: dormant terminal "${String(result.payload.terminalId ?? "")}" created`,
+    );
+  }
+
+  // 5. D4 auto-verify hook (config-gated) — audit the role spawn as a work product and
   //    gate on REJECT. Records the artifact; throws FleetVerifyBlockedError on block.
   if (execute && options.verify?.enabled) {
     log(`verify ${manifest.fleetId}: adversarial-verify of the fleet spawn`);

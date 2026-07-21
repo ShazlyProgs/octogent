@@ -40,7 +40,9 @@ OWNS: Farid R&D engineering, Farid project analysis, hobby projects, personal te
 
 DOES NOT OWN: Collega strategy, product, technology, marketing, or finance. Route those to the CEO.
 
-### Specialist domains
+### Owned profile and specialist domains
+
+`client-delivery` is the durable dormant profile for accountable non-core client delivery; Farid is its first account, not the universal charter.
 
 `farid-tech-engineer` · `farid-project-manager` · `farid-business-consultant` · `hobby-developer` · `srl-product-engineer`
 

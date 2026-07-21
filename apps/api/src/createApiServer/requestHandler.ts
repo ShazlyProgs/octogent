@@ -64,6 +64,7 @@ import {
 } from "./security";
 import {
   handleTerminalItemRoute,
+  handleTerminalLifecycleRoute,
   handleTerminalSnapshotsRoute,
   handleTerminalsCollectionRoute,
 } from "./terminalRoutes";
@@ -151,7 +152,10 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
       handleConversationItemRoute,
     ],
   ],
-  ["terminals", [handleTerminalsCollectionRoute, handleTerminalItemRoute]],
+  [
+    "terminals",
+    [handleTerminalsCollectionRoute, handleTerminalLifecycleRoute, handleTerminalItemRoute],
+  ],
   ["tentacles", [handleTentacleGitRoute, handleTentacleGitPullRequestRoute]],
   ["code-intel", [handleCodeIntelEventsRoute]],
 ]);

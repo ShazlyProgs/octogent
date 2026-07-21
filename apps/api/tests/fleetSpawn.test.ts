@@ -16,7 +16,7 @@ const PACKAGE_ROOT = resolve(import.meta.dirname, "..", "..", "..");
 
 const manifest = () =>
   parseFleetManifest({
-    version: 1,
+    version: 2,
     fleetId: "csuite",
     roles: [
       {
@@ -36,13 +36,15 @@ const manifest = () =>
         description: "Tech",
       },
     ],
+    profiles: [],
   });
 
 describe("loadFleetManifest", () => {
   it("loads and validates the real shipped manifest", () => {
     const shipped = loadFleetManifest(PACKAGE_ROOT);
     expect(shipped.fleetId).toBe("csuite");
-    expect(shipped.roles.length).toBe(7);
+    expect(shipped.roles.length).toBe(11);
+    expect(shipped.profiles).toHaveLength(5);
     const root = shipped.roles.filter((role) => role.parentRoleId === null);
     expect(root.map((role) => role.id)).toEqual(["fleet-ceo"]);
     // Every shipped role must have a staged seed folder with the three seed files.
@@ -52,6 +54,13 @@ describe("loadFleetManifest", () => {
         expect(existsSync(seedPath), `missing seed file ${seedPath}`).toBe(true);
       }
     }
+    for (const profile of shipped.profiles.filter((profile) => profile.kind === "profile")) {
+      for (const file of ["CONTEXT.md", "todo.md", "memory.md"]) {
+        const seedPath = join(PACKAGE_ROOT, profile.seedDir, file);
+        expect(existsSync(seedPath), `missing profile seed file ${seedPath}`).toBe(true);
+      }
+    }
+    expect(shipped.profiles.find((profile) => profile.id === "sara")?.kind).toBe("bound-service");
   });
 
   it("ships a specialist policy pointing at the D5 deny template", () => {

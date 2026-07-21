@@ -267,6 +267,13 @@ const parseV3Terminals = (
       terminal.autoRenamePromptContext = entry.autoRenamePromptContext;
     }
     if (typeof entry.lastActiveAt === "string") terminal.lastActiveAt = entry.lastActiveAt;
+    if (entry.metadata && typeof entry.metadata === "object" && !Array.isArray(entry.metadata)) {
+      terminal.metadata = Object.fromEntries(
+        Object.entries(entry.metadata as Record<string, unknown>).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      );
+    }
     terminals.set(terminalId, terminal);
   }
 

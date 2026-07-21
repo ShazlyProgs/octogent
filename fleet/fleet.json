@@ -1,7 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "fleetId": "csuite",
-  "comment": "#45 W-ORCH-NATIVE Phase 1 — standing C-suite fleet (decision doc §8 rulings D1/D2). One fleet PER MACHINE (D6); machines coordinate via vault git ferries, never cross-host channels. Stand-up is operator-gated: see fleet/README.md.",
+  "comment": "Org v2.1 ratified 2026-07-21. Standing roles are dormant-by-default and wake on demand. Profiles are registered dormant identities; bound services are representation-only and never Claude sessions. One fleet per machine; cross-machine coordination uses vault git ferries. Engine policy (Mohamed-ruled 2026-07-21): standing officers run claude-code; summon build profiles default to codex; bound services never run sessions. GLM remains a delegation lane, not a provider.",
   "roles": [
     {
       "id": "fleet-ceo",
@@ -9,62 +9,151 @@
       "parentRoleId": null,
       "workspaceMode": "shared",
       "promptTemplate": "csuite-agent-init",
-      "description": "Strategic root of the standing fleet. Mohamed prompts the CEO; the CEO delegates down the C-suite tree.",
-      "personaSource": "$AGENTS/agents/ceo.md"
+      "description": "Strategic root. Mohamed directs the CEO; the CEO owns the global queue and delegates through the ratified tree.",
+      "personaSource": "$AGENTS/agents/ceo.md",
+      "agentProvider": "claude-code"
     },
     {
       "id": "fleet-cos",
       "name": "Chief of Staff",
       "parentRoleId": "fleet-ceo",
       "workspaceMode": "shared",
-      "promptTemplate": "csuite-agent-init",
-      "description": "Fleet health + orchestration optimization: tentacle utilization, CONTEXT quality, structural recommendations.",
-      "personaSource": "$AGENTS/agents/cos.md"
+      "promptTemplate": "standing-role-init",
+      "description": "Fleet health, context quality, orchestration audit, and structural recommendations.",
+      "personaSource": "$AGENTS/agents/cos.md",
+      "agentProvider": "claude-code"
     },
     {
-      "id": "fleet-cto",
-      "name": "CTO",
+      "id": "fleet-platform-tl",
+      "name": "Platform Team Lead",
       "parentRoleId": "fleet-ceo",
       "workspaceMode": "shared",
-      "promptTemplate": "csuite-agent-init",
-      "description": "All Collega technical work: plans, spawns ephemeral specialist subagents in worktrees, reviews and reports up.",
-      "personaSource": "$AGENTS/agents/cto.md"
-    },
-    {
-      "id": "fleet-general-engineer",
-      "name": "General Engineer",
-      "parentRoleId": "fleet-ceo",
-      "workspaceMode": "shared",
-      "promptTemplate": "csuite-agent-init",
-      "description": "Everything non-SRL/non-Collega: Farid R&D, hobby projects, personal logistics. Spawns Farid/Hobby specialist subagents.",
-      "personaSource": "$AGENTS/agents/general-engineer.md"
-    },
-    {
-      "id": "fleet-cpo",
-      "name": "CPO",
-      "parentRoleId": "fleet-ceo",
-      "workspaceMode": "shared",
-      "promptTemplate": "csuite-agent-init",
-      "description": "Product roadmap integrity: dependency chain, milestone gates, scope-change protocol.",
-      "personaSource": "$AGENTS/agents/cpo.md"
-    },
-    {
-      "id": "fleet-cmo",
-      "name": "CMO",
-      "parentRoleId": "fleet-ceo",
-      "workspaceMode": "shared",
-      "promptTemplate": "csuite-agent-init",
-      "description": "External narrative: positioning, competitive claims, claim verification before anything goes public.",
-      "personaSource": "$AGENTS/agents/cmo.md"
+      "promptTemplate": "standing-role-init",
+      "description": "Arbitrates CTO/CPO seams and presents one platform verdict to the CEO.",
+      "agentProvider": "claude-code"
     },
     {
       "id": "fleet-cfo",
       "name": "CFO",
       "parentRoleId": "fleet-ceo",
       "workspaceMode": "shared",
-      "promptTemplate": "csuite-agent-init",
-      "description": "Financial governance: pricing architecture, Italian tax/compliance calendar, cost-of-delay analysis.",
-      "personaSource": "$AGENTS/agents/cfo.md"
+      "promptTemplate": "standing-role-init",
+      "description": "Financial governance, pricing analysis, resource economics, and finance-pipeline inheritance.",
+      "personaSource": "$AGENTS/agents/cfo.md",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-ciso",
+      "name": "CISO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "Security, cybersecurity, information and data assurance; commissions bounded audits.",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-clo",
+      "name": "CLO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "Legal, privacy, compliance, consent, and erasure sufficiency; recommendations remain Mohamed-gated.",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-cmo",
+      "name": "CMO",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "External narrative, growth outcomes, and bound Sara service outcomes without service reprovisioning.",
+      "personaSource": "$AGENTS/agents/cmo.md",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-customer-success",
+      "name": "Customer Success",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "Onboarding, adoption, support, feedback quality, and acceptance after activation.",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-general-engineer",
+      "name": "General Engineer",
+      "parentRoleId": "fleet-ceo",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "Non-core engineering and accountable ownership of client delivery.",
+      "personaSource": "$AGENTS/agents/general-engineer.md",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-cto",
+      "name": "CTO",
+      "parentRoleId": "fleet-platform-tl",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "Technical architecture and delivery accountability; owns product and operations profiles.",
+      "personaSource": "$AGENTS/agents/cto.md",
+      "agentProvider": "claude-code"
+    },
+    {
+      "id": "fleet-cpo",
+      "name": "CPO",
+      "parentRoleId": "fleet-platform-tl",
+      "workspaceMode": "shared",
+      "promptTemplate": "standing-role-init",
+      "description": "Product roadmap integrity, research, journey validation, and milestone gates.",
+      "personaSource": "$AGENTS/agents/cpo.md",
+      "agentProvider": "claude-code"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "platform-product-engineer",
+      "name": "Platform Product Engineer",
+      "parentRoleId": "fleet-cto",
+      "promptTemplate": "profile-agent-init",
+      "seedDir": "fleet/tentacles/platform-product-engineer",
+      "kind": "profile",
+      "agentProvider": "codex"
+    },
+    {
+      "id": "platform-operations-engineer",
+      "name": "Platform Operations Engineer",
+      "parentRoleId": "fleet-cto",
+      "promptTemplate": "profile-agent-init",
+      "seedDir": "fleet/tentacles/platform-operations-engineer",
+      "kind": "profile",
+      "agentProvider": "codex"
+    },
+    {
+      "id": "client-delivery",
+      "name": "Client Delivery",
+      "parentRoleId": "fleet-general-engineer",
+      "promptTemplate": "profile-agent-init",
+      "seedDir": "fleet/tentacles/client-delivery",
+      "kind": "profile",
+      "agentProvider": "codex"
+    },
+    {
+      "id": "growth-operations",
+      "name": "Growth Operations",
+      "parentRoleId": "fleet-cmo",
+      "promptTemplate": "profile-agent-init",
+      "seedDir": "fleet/tentacles/growth-operations",
+      "kind": "profile",
+      "agentProvider": "codex"
+    },
+    {
+      "id": "sara",
+      "name": "Sara",
+      "parentRoleId": "fleet-cmo",
+      "promptTemplate": "bound-service-representation",
+      "seedDir": "fleet/tentacles/sara",
+      "kind": "bound-service"
     }
   ],
   "specialists": {
