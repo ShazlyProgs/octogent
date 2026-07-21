@@ -4,6 +4,7 @@ import { FileText, X } from "lucide-react";
 import { buildTerminalSocketUrl } from "../runtime/runtimeEndpoints";
 import { type AgentRuntimeState, AgentStateBadge, isAgentRuntimeState } from "./AgentStateBadge";
 import { TerminalPromptPicker } from "./TerminalPromptPicker";
+import { copySelectionToClipboard, createCopyKeyHandler } from "./terminalClipboard";
 import { stripTerminalMouseReports } from "./terminalInput";
 import { stripScrollbackErase } from "./terminalOutput";
 import { replayTerminalHistory } from "./terminalReplay";
@@ -416,6 +417,16 @@ export const Terminal = ({
           );
         });
 
+        // Copy support: claude's mouse tracking means only Shift+drag selects
+        // (xterm-native). Copy that selection on release, and on the terminal
+        // copy shortcut (Cmd+C / Ctrl+Shift+C) so it reaches the clipboard.
+        const clipboard = navigator.clipboard;
+        terminal.attachCustomKeyEventHandler(createCopyKeyHandler(terminal, clipboard));
+        const onSelectionCopy = () => {
+          copySelectionToClipboard(terminal, clipboard);
+        };
+        wheelListenerTarget.addEventListener("mouseup", onSelectionCopy);
+
         let observer: ResizeObserver | null = null;
         if ("ResizeObserver" in window) {
           observer = new ResizeObserver(() => {
@@ -430,6 +441,7 @@ export const Terminal = ({
         fitAddonRef.current = fitAddon;
         cleanupTerminal = () => {
           wheelListenerTarget.removeEventListener("pointerdown", onPointerDown, true);
+          wheelListenerTarget.removeEventListener("mouseup", onSelectionCopy);
           viewportWheelTarget.removeEventListener("wheel", onWheel);
           if (resizeDebounceTimer !== null) {
             window.clearTimeout(resizeDebounceTimer);
