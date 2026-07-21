@@ -276,6 +276,17 @@ export const createSessionRuntime = ({
       reason: "session_close",
       timestamp: new Date().toISOString(),
     });
+    // Close attached clients now so their close handlers run while this
+    // session is still the map owner, instead of firing later against a
+    // successor session under the same terminal id.
+    for (const websocket of session.clients) {
+      try {
+        websocket.close();
+      } catch {
+        // Ignore socket teardown errors.
+      }
+    }
+    session.clients.clear();
     try {
       session.pty.kill();
     } catch {
@@ -303,6 +314,13 @@ export const createSessionRuntime = ({
   const BRACKETED_PASTE_END = "\x1b[201~";
 
   const scheduleIdleCloseIfNeeded = (session: TerminalSession, sessionId: string) => {
+    // A socket close handler can fire after its session was already closed and
+    // replaced (e.g. stop → start). Arming a timer on that stale object would
+    // later closeSession(sessionId) and kill the successor session.
+    if (sessions.get(sessionId) !== session) {
+      return;
+    }
+
     if (session.keepAliveWithoutClients) {
       return;
     }
@@ -317,6 +335,9 @@ export const createSessionRuntime = ({
     );
     clearIdleCloseTimer(session);
     session.idleCloseTimer = setTimeout(() => {
+      if (sessions.get(sessionId) !== session) {
+        return;
+      }
       appendDebugLog(session, `idle-grace-expired session=${sessionId}`);
       closeSession(sessionId);
     }, sessionIdleGraceMs);
@@ -571,7 +592,17 @@ export const createSessionRuntime = ({
       session.clients.add(websocket);
       appendDebugLog(session, `ws-open session=${sessionId} clients=${session.clients.size}`);
       clearIdleCloseTimer(session);
-      ensureAgentBootstrapped(sessionId, session);
+      // Attach-without-bootstrap: viewing a dormant fleet record (registered
+      // with fleet metadata but no initialPrompt) must not boot a promptless
+      // agent — those wake only via the start endpoint, which stamps the
+      // prompt onto the record first. Non-fleet terminals keep the legacy
+      // boot-on-attach behavior.
+      const attachTerminalRecord = terminals.get(sessionId);
+      const isDormantFleetRecord =
+        Boolean(attachTerminalRecord?.metadata?.fleetId) && !attachTerminalRecord?.initialPrompt;
+      if (!isDormantFleetRecord) {
+        ensureAgentBootstrapped(sessionId, session);
+      }
       sendHistory(websocket, session);
       sendMessage(websocket, {
         type: "state",
@@ -672,7 +703,12 @@ export const createSessionRuntime = ({
 
     session.directListeners.add(listener);
     clearIdleCloseTimer(session);
-    ensureAgentBootstrapped(sessionId, session);
+    const directTerminalRecord = terminals.get(sessionId);
+    const isDormantFleetRecord =
+      Boolean(directTerminalRecord?.metadata?.fleetId) && !directTerminalRecord?.initialPrompt;
+    if (!isDormantFleetRecord) {
+      ensureAgentBootstrapped(sessionId, session);
+    }
 
     // Send history and current state to the new listener
     if (session.scrollbackChunks.length > 0) {
@@ -698,6 +734,16 @@ export const createSessionRuntime = ({
       session = ensureSession(sessionId, tentacleId);
     } catch {
       return false;
+    }
+
+    // Adopt an attach-created bare-shell session: the wake prompt was stamped
+    // onto the terminal record after this session was created, so copy it in
+    // and keep the woken session alive without clients.
+    const terminalRecord = terminals.get(sessionId);
+    if (!session.isBootstrapCommandSent && terminalRecord?.initialPrompt) {
+      session.initialPrompt = terminalRecord.initialPrompt;
+      session.isInitialPromptSent = false;
+      session.keepAliveWithoutClients = true;
     }
 
     clearIdleCloseTimer(session);

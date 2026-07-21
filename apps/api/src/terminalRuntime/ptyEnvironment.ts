@@ -5,9 +5,14 @@ import { dirname, join } from "node:path";
 const require = createRequire(import.meta.url);
 
 export const createShellEnvironment = (options?: { octogentSessionId?: string }) => {
+  // A daemon launched from an agent harness or CI shell inherits
+  // color-suppressing vars (e.g. NO_COLOR=1), which NO_COLOR-spec-compliant
+  // CLIs honor over COLORTERM — every session would render monochrome and
+  // user input becomes indistinguishable from agent output in the UI.
+  const COLOR_SUPPRESSING_KEYS = new Set(["NO_COLOR", "FORCE_COLOR"]);
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") {
+    if (typeof value === "string" && !COLOR_SUPPRESSING_KEYS.has(key)) {
       env[key] = value;
     }
   }

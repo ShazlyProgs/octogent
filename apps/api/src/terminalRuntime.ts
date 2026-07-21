@@ -910,7 +910,8 @@ export const createTerminalRuntime = ({
       if (!terminal) {
         return null;
       }
-      if (sessions.has(terminalId)) {
+      const existingSession = sessions.get(terminalId);
+      if (existingSession?.isBootstrapCommandSent) {
         throw new RuntimeInputError(`Terminal "${terminalId}" is already running.`);
       }
       if (terminal.metadata?.fleetProfileKind === "bound-service") {
