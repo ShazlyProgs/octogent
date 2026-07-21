@@ -22,4 +22,21 @@ describe("stripTerminalMouseReports", () => {
       expect(stripTerminalMouseReports(input)).toBe(input);
     },
   );
+
+  it.each([
+    ["SGR wheel up", "\u001b[<64;12;8M"],
+    ["SGR wheel down", "\u001b[<65;12;8M"],
+    ["SGR wheel left", "\u001b[<66;12;8M"],
+    ["SGR wheel right", "\u001b[<67;12;8M"],
+    ["SGR wheel up with shift", "\u001b[<68;12;8M"],
+    ["SGR wheel up with ctrl", "\u001b[<80;12;8M"],
+  ])("preserves a %s report so alternate-screen apps can scroll their transcript", (_l, report) => {
+    expect(stripTerminalMouseReports(report)).toBe(report);
+  });
+
+  it("still strips click reports adjacent to preserved wheel reports", () => {
+    expect(stripTerminalMouseReports("\u001b[<0;1;1M\u001b[<64;12;8M\u001b[<0;1;1m")).toBe(
+      "\u001b[<64;12;8M",
+    );
+  });
 });

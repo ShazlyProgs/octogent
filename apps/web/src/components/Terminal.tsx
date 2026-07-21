@@ -5,8 +5,9 @@ import { buildTerminalSocketUrl } from "../runtime/runtimeEndpoints";
 import { type AgentRuntimeState, AgentStateBadge, isAgentRuntimeState } from "./AgentStateBadge";
 import { TerminalPromptPicker } from "./TerminalPromptPicker";
 import { stripTerminalMouseReports } from "./terminalInput";
+import { stripScrollbackErase } from "./terminalOutput";
 import { replayTerminalHistory } from "./terminalReplay";
-import { wheelDeltaToScrollLines } from "./terminalWheel";
+import { shouldUseManualWheelScroll, wheelDeltaToScrollLines } from "./terminalWheel";
 
 import "xterm/css/xterm.css";
 
@@ -201,25 +202,27 @@ export const Terminal = ({
         try {
           const payload = JSON.parse(event.data) as TerminalServerMessage;
           if (payload.type === "history" && typeof payload.data === "string") {
+            const historyData = stripScrollbackErase(payload.data);
             if (activeTerminal) {
               const viewport =
                 containerRef.current?.querySelector<HTMLElement>(".xterm-viewport") ?? null;
-              replayTerminalHistory(activeTerminal, payload.data, viewport);
+              replayTerminalHistory(activeTerminal, historyData, viewport);
               return;
             }
 
-            pendingHistoryData = payload.data;
+            pendingHistoryData = historyData;
             pendingOutputChunks.length = 0;
             return;
           }
 
           if (payload.type === "output" && typeof payload.data === "string") {
+            const outputData = stripScrollbackErase(payload.data);
             if (activeTerminal) {
-              activeTerminal.write(payload.data);
+              activeTerminal.write(outputData);
               return;
             }
 
-            pendingOutputChunks.push(payload.data);
+            pendingOutputChunks.push(outputData);
             return;
           }
 
@@ -238,12 +241,13 @@ export const Terminal = ({
             return;
           }
         } catch {
+          const rawData = stripScrollbackErase(event.data);
           if (activeTerminal) {
-            activeTerminal.write(event.data);
+            activeTerminal.write(rawData);
             return;
           }
 
-          pendingOutputChunks.push(event.data);
+          pendingOutputChunks.push(rawData);
         }
       });
     };
@@ -335,6 +339,12 @@ export const Terminal = ({
           terminal.focus();
         };
         const onWheel = (event: WheelEvent) => {
+          if (!shouldUseManualWheelScroll(terminal.buffer?.active)) {
+            // Alternate-screen apps (claude) own their scrolling: let xterm's
+            // default handler encode the wheel as mouse reports for the PTY.
+            return;
+          }
+
           const lines = wheelDeltaToScrollLines(event.deltaY, event.deltaMode);
           if (lines === 0) {
             return;
