@@ -5,6 +5,7 @@ import { buildTerminalSocketUrl } from "../runtime/runtimeEndpoints";
 import { type AgentRuntimeState, AgentStateBadge, isAgentRuntimeState } from "./AgentStateBadge";
 import { TerminalPromptPicker } from "./TerminalPromptPicker";
 import { copySelectionToClipboard, createCopyKeyHandler } from "./terminalClipboard";
+import { createTerminalWriteCoalescer } from "./terminalFlush";
 import { stripTerminalMouseReports } from "./terminalInput";
 import { stripScrollbackErase } from "./terminalOutput";
 import { replayTerminalHistory } from "./terminalReplay";
@@ -55,6 +56,11 @@ type TerminalServerMessage =
   | TerminalHistoryMessage
   | TerminalRenameMessage
   | TerminalActivityMessage;
+
+// Bounded scrollback (xterm's default is 1000 lines). Long-running claude
+// sessions repaint in bursts; paired with the rAF write coalescer this caps both
+// write frequency and retained buffer memory instead of growing without limit.
+const TERMINAL_SCROLLBACK_LINES = 10_000;
 
 const PromptInjectIcon = () => (
   <svg
@@ -136,6 +142,7 @@ export const Terminal = ({
     } | null = null;
     let pendingHistoryData: string | null = null;
     const pendingOutputChunks: string[] = [];
+    let writeCoalescer: ReturnType<typeof createTerminalWriteCoalescer> | null = null;
     const pendingInputChunks: string[] = [];
     const PENDING_INPUT_MAX_CHARS = 64 * 1024;
     let pendingInputChars = 0;
@@ -218,8 +225,11 @@ export const Terminal = ({
 
           if (payload.type === "output" && typeof payload.data === "string") {
             const outputData = stripScrollbackErase(payload.data);
-            if (activeTerminal) {
-              activeTerminal.write(outputData);
+            if (writeCoalescer) {
+              // Coalesce per-message writes into one terminal.write per animation
+              // frame so burst streaming can't flood the main thread. Order and
+              // the ESC[3J strip above are unchanged.
+              writeCoalescer.enqueue(outputData);
               return;
             }
 
@@ -243,8 +253,8 @@ export const Terminal = ({
           }
         } catch {
           const rawData = stripScrollbackErase(event.data);
-          if (activeTerminal) {
-            activeTerminal.write(rawData);
+          if (writeCoalescer) {
+            writeCoalescer.enqueue(rawData);
             return;
           }
 
@@ -299,6 +309,7 @@ export const Terminal = ({
           cursorWidth: 2,
           fontFamily: '"JetBrains Mono", "IBM Plex Mono", monospace',
           fontSize: terminalFontSize,
+          scrollback: TERMINAL_SCROLLBACK_LINES,
           theme: {
             background: terminalBackground,
             foreground: "#f0f0f0",
@@ -321,6 +332,11 @@ export const Terminal = ({
           // Non-critical: terminal works without unicode11, just with less accurate character widths
         }
         activeTerminal = terminal;
+        writeCoalescer = createTerminalWriteCoalescer(
+          terminal,
+          (callback) => window.requestAnimationFrame(callback),
+          (handle) => window.cancelAnimationFrame(handle),
+        );
 
         if (pendingHistoryData !== null) {
           replayTerminalHistory(terminal, pendingHistoryData, null);
@@ -328,7 +344,7 @@ export const Terminal = ({
         }
         if (pendingOutputChunks.length > 0) {
           for (const chunk of pendingOutputChunks) {
-            terminal.write(chunk);
+            writeCoalescer.enqueue(chunk);
           }
           pendingOutputChunks.length = 0;
         }
@@ -448,6 +464,8 @@ export const Terminal = ({
           }
           observer?.disconnect();
           onDataDisposable.dispose();
+          writeCoalescer?.dispose();
+          writeCoalescer = null;
           terminal.dispose();
           terminalRef.current = null;
           fitAddonRef.current = null;
