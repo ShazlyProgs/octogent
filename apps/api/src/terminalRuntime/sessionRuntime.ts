@@ -22,7 +22,12 @@ import {
 import { broadcastMessage, getTerminalId, sendMessage } from "./protocol";
 import { createShellEnvironment, ensureNodePtySpawnHelperExecutable } from "./ptyEnvironment";
 import { toErrorMessage } from "./systemClients";
-import type { DirectSessionListener, PersistedTerminal, TerminalSession } from "./types";
+import type {
+  DirectSessionListener,
+  PersistedTerminal,
+  TerminalAgentProvider,
+  TerminalSession,
+} from "./types";
 
 type CreateSessionRuntimeOptions = {
   websocketServer: WebSocketServer;
@@ -350,7 +355,8 @@ export const createSessionRuntime = ({
 
     session.isBootstrapCommandSent = true;
     const terminal = terminals.get(session.terminalId);
-    const provider = terminal?.agentProvider ?? DEFAULT_AGENT_PROVIDER;
+    const provider =
+      session.agentProviderOverride ?? terminal?.agentProvider ?? DEFAULT_AGENT_PROVIDER;
 
     const bootstrapCommand =
       TERMINAL_BOOTSTRAP_COMMANDS[provider] ?? TERMINAL_BOOTSTRAP_COMMANDS[DEFAULT_AGENT_PROVIDER];
@@ -722,7 +728,10 @@ export const createSessionRuntime = ({
     };
   };
 
-  const startSession = (terminalId: string): boolean => {
+  const startSession = (
+    terminalId: string,
+    agentProviderOverride?: TerminalAgentProvider,
+  ): boolean => {
     const resolvedSession = resolveSession(terminalId);
     if (!resolvedSession) {
       return false;
@@ -744,6 +753,13 @@ export const createSessionRuntime = ({
       session.initialPrompt = terminalRecord.initialPrompt;
       session.isInitialPromptSent = false;
       session.keepAliveWithoutClients = true;
+    }
+
+    // A wake may select a provider for this session only (for example, the
+    // WhatsApp policy uses Codex). Never mutate the durable terminal record:
+    // later ordinary wakes still use its configured provider.
+    if (!session.isBootstrapCommandSent && agentProviderOverride !== undefined) {
+      session.agentProviderOverride = agentProviderOverride;
     }
 
     clearIdleCloseTimer(session);

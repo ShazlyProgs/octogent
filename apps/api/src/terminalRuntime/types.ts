@@ -73,6 +73,8 @@ export type TerminalSession = {
   initialInputDraft?: string;
   isInitialInputDraftSent?: boolean;
   keepAliveWithoutClients?: boolean;
+  /** One-session provider selected by an explicit wake request; never persisted to the terminal record. */
+  agentProviderOverride?: TerminalAgentProvider;
   hasSeenProcessing?: boolean;
   lastToolName?: string | undefined;
   bootstrapAt?: number;

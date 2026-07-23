@@ -304,6 +304,7 @@ export const handleTerminalLifecycleRoute: ApiRouteHandler = async (
   const terminalId = decodeURIComponent(actionMatch[1] ?? "");
   const action = actionMatch[2];
   let prompt: string | undefined;
+  let agentProviderOverride: TerminalAgentProvider | undefined;
   if (action === "start") {
     const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
     if (!bodyReadResult.ok) {
@@ -328,13 +329,19 @@ export const handleTerminalLifecycleRoute: ApiRouteHandler = async (
         return true;
       }
       prompt = promptValue.trim();
+      const providerResult = parseTerminalAgentProvider(bodyReadResult.payload);
+      if (providerResult.error) {
+        writeJson(response, 400, { error: providerResult.error }, corsOrigin);
+        return true;
+      }
+      agentProviderOverride = providerResult.agentProvider;
     }
   }
 
   try {
     const snapshot =
       action === "start"
-        ? runtime.startTerminal(terminalId, prompt)
+        ? runtime.startTerminal(terminalId, prompt, agentProviderOverride)
         : runtime.stopTerminal(terminalId);
     if (!snapshot) {
       writeJson(response, 404, { error: "Terminal not found." }, corsOrigin);

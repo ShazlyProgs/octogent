@@ -2115,6 +2115,73 @@ describe("createApiServer", () => {
     expect(secondStartResponse.status).toBe(409);
   });
 
+  it("uses a transient start provider without mutating the durable terminal provider", async () => {
+    spawnMock.mockReset();
+    const pty = new FakePty();
+    spawnMock.mockReturnValue(pty);
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        terminalId: "transient-provider-terminal",
+        tentacleId: "fleet-cfo",
+        agentProvider: "claude-code",
+        initialInputDraft: "Stored CFO charter",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const startResponse = await fetch(
+      `${baseUrl}/api/terminals/transient-provider-terminal/start`,
+      {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "WhatsApp CFO turn", agentProvider: "codex" }),
+      },
+    );
+    expect(startResponse.status).toBe(200);
+    expect(pty.write).toHaveBeenCalledWith("codex\r");
+
+    const registryDocument = await waitForRegistryDocument<{
+      terminals: Array<{ terminalId: string; agentProvider?: string }>;
+    }>(workspaceCwd, (document) =>
+      document.terminals.some(
+        (terminal) => terminal.terminalId === "transient-provider-terminal",
+      ),
+    );
+    expect(registryDocument.terminals[0]?.agentProvider).toBe("claude-code");
+  });
+
+  it("rejects an invalid transient start provider", async () => {
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue(new FakePty());
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const baseUrl = await startServer({ workspaceCwd });
+
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        terminalId: "invalid-provider-terminal",
+        initialInputDraft: "Stored charter",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const startResponse = await fetch(`${baseUrl}/api/terminals/invalid-provider-terminal/start`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", agentProvider: "unknown" }),
+    });
+    expect(startResponse.status).toBe(400);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("never starts a bound-service profile as a Claude session", async () => {
     spawnMock.mockReset();
     spawnMock.mockReturnValue(new FakePty());

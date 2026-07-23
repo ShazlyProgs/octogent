@@ -905,7 +905,11 @@ export const createTerminalRuntime = ({
 
     createTerminal,
 
-    startTerminal(terminalId: string, prompt?: string): TerminalSnapshot | null {
+    startTerminal(
+      terminalId: string,
+      prompt?: string,
+      agentProviderOverride?: TerminalAgentProvider,
+    ): TerminalSnapshot | null {
       const terminal = terminals.get(terminalId);
       if (!terminal) {
         return null;
@@ -929,7 +933,7 @@ export const createTerminalRuntime = ({
 
       const previousInitialPrompt = terminal.initialPrompt;
       terminal.initialPrompt = initialPrompt;
-      if (!sessionRuntime.startSession(terminalId)) {
+      if (!sessionRuntime.startSession(terminalId, agentProviderOverride)) {
         if (previousInitialPrompt) {
           terminal.initialPrompt = previousInitialPrompt;
         } else {
