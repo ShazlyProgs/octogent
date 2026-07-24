@@ -2144,7 +2144,7 @@ describe("createApiServer", () => {
       },
     );
     expect(startResponse.status).toBe(200);
-    expect(pty.write).toHaveBeenCalledWith("codex\r");
+    expect(pty.write).toHaveBeenCalledWith("codex --disable hooks\r");
 
     const registryDocument = await waitForRegistryDocument<{
       terminals: Array<{ terminalId: string; agentProvider?: string }>;

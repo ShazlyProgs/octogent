@@ -7,7 +7,8 @@ export const TENTACLE_WORKTREE_BRANCH_PREFIX = "octogent/";
 export const DEFAULT_AGENT_PROVIDER = "claude-code" as const;
 
 export const TERMINAL_BOOTSTRAP_COMMANDS: Record<string, string> = {
-  codex: "codex",
+  // Unattended Codex wakes must not stop on plugin-hook trust review.
+  codex: "codex --disable hooks",
   "claude-code": "claude",
 };
 export const TERMINAL_SESSION_IDLE_GRACE_MS = 5 * 60 * 1000;
