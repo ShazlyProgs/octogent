@@ -7,7 +7,7 @@ import { TerminalPromptPicker } from "./TerminalPromptPicker";
 import { copySelectionToClipboard, createCopyKeyHandler } from "./terminalClipboard";
 import { createTerminalWriteCoalescer } from "./terminalFlush";
 import { stripTerminalMouseReports } from "./terminalInput";
-import { stripScrollbackErase } from "./terminalOutput";
+import { createTerminalSanitizer } from "./terminalOutput";
 import { replayTerminalHistory } from "./terminalReplay";
 import { shouldUseManualWheelScroll, wheelDeltaToScrollLines } from "./terminalWheel";
 
@@ -143,11 +143,27 @@ export const Terminal = ({
     let pendingHistoryData: string | null = null;
     const pendingOutputChunks: string[] = [];
     let writeCoalescer: ReturnType<typeof createTerminalWriteCoalescer> | null = null;
+    // One escape-aware sanitizer per terminal stream. It carries partial-sequence
+    // state across messages so a boundary-split ESC[3J is still stripped and an
+    // OSC title sequence split from its BEL terminator is swallowed whole (no
+    // phantom beep). Held-back tail bytes are drained in flushPendingOutput.
+    const outputSanitizer = createTerminalSanitizer();
     const pendingInputChunks: string[] = [];
     const PENDING_INPUT_MAX_CHARS = 64 * 1024;
     let pendingInputChars = 0;
 
     const flushPendingOutput = () => {
+      // Drain any bytes the sanitizer held back (a partial escape that never
+      // completed) before flushing the coalescer, so teardown never silently
+      // drops tail bytes — they are written through as literal text.
+      const heldTail = outputSanitizer.flush();
+      if (heldTail.length > 0) {
+        if (writeCoalescer) {
+          writeCoalescer.push(heldTail);
+        } else {
+          pendingOutputChunks.push(heldTail);
+        }
+      }
       writeCoalescer?.flush();
     };
 
@@ -215,7 +231,7 @@ export const Terminal = ({
         try {
           const payload = JSON.parse(event.data) as TerminalServerMessage;
           if (payload.type === "history" && typeof payload.data === "string") {
-            const historyData = stripScrollbackErase(payload.data);
+            const historyData = outputSanitizer.sanitize(payload.data);
             if (activeTerminal) {
               flushPendingOutput();
               const viewport =
@@ -230,7 +246,7 @@ export const Terminal = ({
           }
 
           if (payload.type === "output" && typeof payload.data === "string") {
-            const outputData = stripScrollbackErase(payload.data);
+            const outputData = outputSanitizer.sanitize(payload.data);
             if (writeCoalescer) {
               writeCoalescer.push(outputData);
               return;
@@ -255,7 +271,7 @@ export const Terminal = ({
             return;
           }
         } catch {
-          const rawData = stripScrollbackErase(event.data);
+          const rawData = outputSanitizer.sanitize(event.data);
           if (writeCoalescer) {
             writeCoalescer.push(rawData);
             return;
