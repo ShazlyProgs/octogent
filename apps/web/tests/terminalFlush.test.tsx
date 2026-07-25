@@ -2,140 +2,104 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createTerminalWriteCoalescer } from "../src/components/terminalFlush";
 
-const createMockTerminal = () => ({
-  write: vi.fn((_: string, _callback?: () => void) => {}),
-});
-
-// A controllable requestAnimationFrame stub: scheduled callbacks sit in a queue
-// until `fire()` drains them, so a test can enqueue a synchronous burst (the
-// freeze scenario) and assert nothing writes until the frame is released.
-const createRafStub = () => {
+const createFlushTrigger = () => {
   let nextHandle = 1;
-  const queue = new Map<number, FrameRequestCallback>();
-  const cancelled = new Set<number>();
-  const schedule = vi.fn((callback: FrameRequestCallback) => {
+  const callbacks = new Map<number, () => void>();
+  const requestFlush = vi.fn((flush: () => void) => {
     const handle = nextHandle++;
-    queue.set(handle, callback);
+    callbacks.set(handle, flush);
     return handle;
   });
-  const cancel = vi.fn((handle: number) => {
-    queue.delete(handle);
-    cancelled.add(handle);
+  const cancelFlush = vi.fn((handle: number) => {
+    callbacks.delete(handle);
   });
+
   return {
-    schedule,
-    cancel,
-    pendingCount: () => queue.size,
-    cancelledCount: () => cancelled.size,
+    requestFlush,
+    cancelFlush,
     fire() {
-      const callbacks = [...queue.values()];
-      queue.clear();
-      for (const callback of callbacks) {
-        callback(0);
+      const pendingCallbacks = [...callbacks.values()];
+      callbacks.clear();
+      for (const callback of pendingCallbacks) {
+        callback();
       }
     },
   };
 };
 
 describe("createTerminalWriteCoalescer", () => {
-  it("writes a single enqueued chunk once the frame fires", () => {
-    const terminal = createMockTerminal();
-    const raf = createRafStub();
-    const coalescer = createTerminalWriteCoalescer(terminal, raf.schedule, raf.cancel);
+  it("preserves FIFO order and LF line endings in one flush", () => {
+    const write = vi.fn();
+    const trigger = createFlushTrigger();
+    const coalescer = createTerminalWriteCoalescer({ write, ...trigger });
 
-    coalescer.enqueue("hello");
+    coalescer.push("alpha\n");
+    coalescer.push("beta");
+    coalescer.push("\ngamma\n");
 
-    // Buffered until the frame — main thread is not blocked by a write.
-    expect(raf.schedule).toHaveBeenCalledTimes(1);
-    expect(terminal.write).not.toHaveBeenCalled();
-
-    raf.fire();
-
-    expect(terminal.write).toHaveBeenCalledTimes(1);
-    expect(terminal.write).toHaveBeenCalledWith("hello");
+    expect(trigger.requestFlush).toHaveBeenCalledTimes(1);
+    expect(coalescer.flush()).toBe("alpha\nbeta\ngamma\n");
+    expect(write).toHaveBeenCalledWith("alpha\nbeta\ngamma\n");
   });
 
-  it("coalesces a burst of chunks into one terminal.write per frame, preserving order", () => {
-    const terminal = createMockTerminal();
-    const raf = createRafStub();
-    const coalescer = createTerminalWriteCoalescer(terminal, raf.schedule, raf.cancel);
+  it("returns nothing for an empty buffer and does not call through", () => {
+    const write = vi.fn();
+    const trigger = createFlushTrigger();
+    const coalescer = createTerminalWriteCoalescer({ write, ...trigger });
 
-    // Burst flood: many chunks arrive synchronously before the frame fires.
-    // This is exactly claude's token-by-token stream that froze the UI when each
-    // chunk triggered its own JSON.parse + terminal.write.
-    const count = 1000;
-    for (let i = 0; i < count; i++) {
-      coalescer.enqueue(`chunk-${i};`);
+    expect(coalescer.flush()).toBeUndefined();
+    expect(trigger.requestFlush).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("turns many messages into one scheduled write without losing data", () => {
+    const write = vi.fn();
+    const trigger = createFlushTrigger();
+    const coalescer = createTerminalWriteCoalescer({ write, ...trigger });
+    const chunks = Array.from({ length: 1_000 }, (_, index) => `chunk-${index};`);
+
+    for (const chunk of chunks) {
+      coalescer.push(chunk);
     }
 
-    // One frame scheduled for the whole burst, zero writes — the main thread is
-    // freed from per-message overhead no matter how large the flood.
-    expect(raf.schedule).toHaveBeenCalledTimes(1);
-    expect(raf.pendingCount()).toBe(1);
-    expect(terminal.write).not.toHaveBeenCalled();
+    expect(trigger.requestFlush).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
 
-    raf.fire();
+    trigger.fire();
 
-    // Exactly one write, every chunk present and in arrival order.
-    expect(terminal.write).toHaveBeenCalledTimes(1);
-    const [firstCall] = terminal.write.mock.calls;
-    const written = firstCall?.[0] ?? "";
-    const chunks = written.split(";").filter(Boolean);
-    expect(chunks).toHaveLength(count);
-    expect(chunks[0]).toBe("chunk-0");
-    expect(chunks[count - 1]).toBe(`chunk-${count - 1}`);
-    expect(raf.pendingCount()).toBe(0);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(chunks.join(""));
   });
 
-  it("schedules a fresh frame for a burst that arrives after the previous flush", () => {
-    const terminal = createMockTerminal();
-    const raf = createRafStub();
-    const coalescer = createTerminalWriteCoalescer(terminal, raf.schedule, raf.cancel);
+  it("flushes a pending burst synchronously during teardown without data loss", () => {
+    const write = vi.fn();
+    const trigger = createFlushTrigger();
+    const coalescer = createTerminalWriteCoalescer({ write, ...trigger });
 
-    coalescer.enqueue("a");
-    raf.fire();
-    expect(terminal.write).toHaveBeenCalledTimes(1);
+    coalescer.push("pending ");
+    coalescer.push("output\n");
 
-    coalescer.enqueue("b");
-    coalescer.enqueue("c");
+    expect(coalescer.flush()).toBe("pending output\n");
+    expect(trigger.cancelFlush).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith("pending output\n");
 
-    expect(raf.schedule).toHaveBeenCalledTimes(2);
-    expect(terminal.write).toHaveBeenCalledTimes(1);
-
-    raf.fire();
-
-    expect(terminal.write).toHaveBeenCalledTimes(2);
-    expect(terminal.write).toHaveBeenLastCalledWith("bc");
+    trigger.fire();
+    expect(write).toHaveBeenCalledTimes(1);
   });
 
-  it("dispose cancels the pending frame and discards buffered chunks without writing", () => {
-    const terminal = createMockTerminal();
-    const raf = createRafStub();
-    const coalescer = createTerminalWriteCoalescer(terminal, raf.schedule, raf.cancel);
+  it("requests a new flush after the previous burst was drained", () => {
+    const write = vi.fn();
+    const trigger = createFlushTrigger();
+    const coalescer = createTerminalWriteCoalescer({ write, ...trigger });
 
-    coalescer.enqueue("pending");
-    expect(raf.pendingCount()).toBe(1);
+    coalescer.push("first");
+    trigger.fire();
+    coalescer.push("second");
 
-    coalescer.dispose();
-
-    expect(raf.cancel).toHaveBeenCalledTimes(1);
-    expect(terminal.write).not.toHaveBeenCalled();
-
-    // Even if the frame were somehow released, a disposed coalescer writes nothing.
-    raf.fire();
-    expect(terminal.write).not.toHaveBeenCalled();
-  });
-
-  it("ignores enqueues after dispose so a torn-down terminal is never written to", () => {
-    const terminal = createMockTerminal();
-    const raf = createRafStub();
-    const coalescer = createTerminalWriteCoalescer(terminal, raf.schedule, raf.cancel);
-
-    coalescer.dispose();
-    coalescer.enqueue("late");
-
-    expect(raf.schedule).not.toHaveBeenCalled();
-    raf.fire();
-    expect(terminal.write).not.toHaveBeenCalled();
+    expect(trigger.requestFlush).toHaveBeenCalledTimes(2);
+    trigger.fire();
+    expect(write).toHaveBeenNthCalledWith(1, "first");
+    expect(write).toHaveBeenNthCalledWith(2, "second");
   });
 });

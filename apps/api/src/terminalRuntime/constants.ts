@@ -12,5 +12,5 @@ export const TERMINAL_BOOTSTRAP_COMMANDS: Record<string, string> = {
   "claude-code": "claude",
 };
 export const TERMINAL_SESSION_IDLE_GRACE_MS = 5 * 60 * 1000;
-export const TERMINAL_SCROLLBACK_MAX_BYTES = 512 * 1024;
+export const TERMINAL_SCROLLBACK_MAX_BYTES = 256 * 1024;
 export const DEFAULT_TERMINAL_INACTIVITY_THRESHOLD_MS = 2 * 24 * 60 * 60 * 1000; // 2 days

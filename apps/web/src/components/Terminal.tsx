@@ -147,6 +147,10 @@ export const Terminal = ({
     const PENDING_INPUT_MAX_CHARS = 64 * 1024;
     let pendingInputChars = 0;
 
+    const flushPendingOutput = () => {
+      writeCoalescer?.flush();
+    };
+
     const enqueuePendingInput = (data: string) => {
       if (pendingInputChars + data.length > PENDING_INPUT_MAX_CHARS) {
         return;
@@ -184,6 +188,7 @@ export const Terminal = ({
         if (isCancelled || socket !== nextSocket) {
           return;
         }
+        flushPendingOutput();
         socketRef.current = null;
         setConnectionState("closed");
         reconnectTimer = window.setTimeout(() => {
@@ -212,6 +217,7 @@ export const Terminal = ({
           if (payload.type === "history" && typeof payload.data === "string") {
             const historyData = stripScrollbackErase(payload.data);
             if (activeTerminal) {
+              flushPendingOutput();
               const viewport =
                 containerRef.current?.querySelector<HTMLElement>(".xterm-viewport") ?? null;
               replayTerminalHistory(activeTerminal, historyData, viewport);
@@ -226,10 +232,7 @@ export const Terminal = ({
           if (payload.type === "output" && typeof payload.data === "string") {
             const outputData = stripScrollbackErase(payload.data);
             if (writeCoalescer) {
-              // Coalesce per-message writes into one terminal.write per animation
-              // frame so burst streaming can't flood the main thread. Order and
-              // the ESC[3J strip above are unchanged.
-              writeCoalescer.enqueue(outputData);
+              writeCoalescer.push(outputData);
               return;
             }
 
@@ -254,7 +257,7 @@ export const Terminal = ({
         } catch {
           const rawData = stripScrollbackErase(event.data);
           if (writeCoalescer) {
-            writeCoalescer.enqueue(rawData);
+            writeCoalescer.push(rawData);
             return;
           }
 
@@ -332,22 +335,56 @@ export const Terminal = ({
           // Non-critical: terminal works without unicode11, just with less accurate character widths
         }
         activeTerminal = terminal;
-        writeCoalescer = createTerminalWriteCoalescer(
-          terminal,
-          (callback) => window.requestAnimationFrame(callback),
-          (handle) => window.cancelAnimationFrame(handle),
-        );
+        const flushHandles = new Map<
+          number,
+          { type: "animation-frame" | "timer"; nativeHandle: number }
+        >();
+        let nextFlushHandle = 1;
+        writeCoalescer = createTerminalWriteCoalescer({
+          write: (output) => terminal.write(output),
+          requestFlush: (flush) => {
+            const handle = nextFlushHandle++;
+            if (typeof window.requestAnimationFrame === "function") {
+              flushHandles.set(handle, {
+                type: "animation-frame",
+                nativeHandle: window.requestAnimationFrame(() => {
+                  flushHandles.delete(handle);
+                  flush();
+                }),
+              });
+            } else {
+              flushHandles.set(handle, {
+                type: "timer",
+                nativeHandle: window.setTimeout(() => {
+                  flushHandles.delete(handle);
+                  flush();
+                }, 16),
+              });
+            }
+            return handle;
+          },
+          cancelFlush: (handle) => {
+            const scheduledFlush = flushHandles.get(handle);
+            if (!scheduledFlush) {
+              return;
+            }
+            flushHandles.delete(handle);
+            if (scheduledFlush.type === "animation-frame") {
+              window.cancelAnimationFrame(scheduledFlush.nativeHandle);
+            } else {
+              window.clearTimeout(scheduledFlush.nativeHandle);
+            }
+          },
+        });
 
         if (pendingHistoryData !== null) {
           replayTerminalHistory(terminal, pendingHistoryData, null);
           pendingHistoryData = null;
         }
-        if (pendingOutputChunks.length > 0) {
-          for (const chunk of pendingOutputChunks) {
-            writeCoalescer.enqueue(chunk);
-          }
-          pendingOutputChunks.length = 0;
+        for (const chunk of pendingOutputChunks) {
+          writeCoalescer.push(chunk);
         }
+        pendingOutputChunks.length = 0;
 
         const wheelListenerTarget = containerRef.current;
         const viewportWheelTarget =
@@ -464,7 +501,7 @@ export const Terminal = ({
           }
           observer?.disconnect();
           onDataDisposable.dispose();
-          writeCoalescer?.dispose();
+          flushPendingOutput();
           writeCoalescer = null;
           terminal.dispose();
           terminalRef.current = null;
