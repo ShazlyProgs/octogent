@@ -43,7 +43,7 @@ import {
   loadTerminalRegistry,
   pruneUiStateTerminalReferences,
 } from "./terminalRuntime/registry";
-import { createSessionRuntime } from "./terminalRuntime/sessionRuntime";
+import { CLAUDE_SESSION_ID_PATTERN, createSessionRuntime } from "./terminalRuntime/sessionRuntime";
 import { createDefaultGitClient } from "./terminalRuntime/systemClients";
 import type { DirectSessionListener } from "./terminalRuntime/types";
 import {
@@ -73,13 +73,25 @@ export const MAX_CHILDREN_PER_PARENT = 9;
 /**
  * Result of submitting a chat turn into a conversation (#45 Phase 3 [D9] send-message adapter).
  * Discriminated so the HTTP route maps each case to the legacy-parity status code without a
- * try/catch: accepted → 202, busy → 409, no-session → 404, invalid-content → 400.
+ * try/catch: accepted → 202, busy → 409, delivery-blocked → 409, no-session → 404, invalid-content → 400.
  */
 export type SubmitConversationMessageResult =
   | { status: "accepted"; submitId: string; tentacleId: string; text: string }
   | { status: "busy"; tentacleId: string }
+  | { status: "delivery-blocked"; reason: "delivery_blocked"; deliveryBlockedReason: string }
   | { status: "no-session" }
   | { status: "invalid-content"; error: string };
+
+export const deliveryBlockedSubmitResult = (
+  session: { deliveryBlocked?: { reason: string } } | null | undefined,
+): Extract<SubmitConversationMessageResult, { status: "delivery-blocked" }> | null => {
+  if (!session?.deliveryBlocked) return null;
+  return {
+    status: "delivery-blocked",
+    reason: "delivery_blocked",
+    deliveryBlockedReason: session.deliveryBlocked.reason,
+  };
+};
 
 /**
  * Result of starting a chat conversation (#45 Phase 3 [D9] create-conversation adapter).
@@ -308,6 +320,9 @@ export const createTerminalRuntime = ({
     persistRegistry,
     deliverChannelMessages: channelMessaging.deliverChannelMessages,
     deliverPendingAttachments: flushPendingAttachmentDeliveries,
+    onClaudeStop: (terminalId: string) => {
+      sessionRuntime.noteProviderTurnEnded(terminalId);
+    },
     onStateChange: broadcastTerminalStateChanged,
     ...(vaultRoot ? { vaultRoot } : {}),
   });
@@ -370,6 +385,20 @@ export const createTerminalRuntime = ({
       ...(terminal.parentTerminalId ? { parentTerminalId: terminal.parentTerminalId } : {}),
       ...(terminal.metadata ? { metadata: { ...terminal.metadata } } : {}),
       ...(session ? { agentRuntimeState: session.agentState } : {}),
+      ...(() => {
+        const blocked = session?.deliveryBlocked;
+        return blocked ? { deliveryBlocked: true as const, deliveryBlockedReason: blocked.reason } : {};
+      })(),
+      ...(() => {
+        const lt = sessionRuntime.getLogTruth?.(terminal.terminalId);
+        return lt
+          ? {
+              stateSource: lt.stateSource,
+              stateAgeSec: lt.stateAgeSec,
+              logTruth: lt,
+            }
+          : {};
+      })(),
     };
   };
 
@@ -423,6 +452,7 @@ export const createTerminalRuntime = ({
     autoRenamePromptContext,
     metadata,
     cwdScope: requestedCwdScope,
+    codexThreadId,
   }: {
     terminalId?: string;
     tentacleId?: string;
@@ -438,6 +468,7 @@ export const createTerminalRuntime = ({
     autoRenamePromptContext?: string;
     metadata?: Record<string, string>;
     cwdScope?: "vault";
+    codexThreadId?: string;
   }): TerminalSnapshot => {
     // Enforce max children per parent.
     if (parentTerminalId) {
@@ -482,6 +513,7 @@ export const createTerminalRuntime = ({
       createdAt: new Date().toISOString(),
       workspaceMode,
       agentProvider: agentProvider ?? DEFAULT_AGENT_PROVIDER,
+      ...(codexThreadId ? { codexThreadId } : {}),
       ...(initialPrompt ? { initialPrompt } : {}),
       ...(initialInputDraft ? { initialInputDraft } : {}),
       ...(initialPrompt ? { lastActiveAt: new Date().toISOString() } : {}),
@@ -552,7 +584,12 @@ export const createTerminalRuntime = ({
     allocateTerminalId,
 
     listConversationSessions() {
-      return listConversationSessions(transcriptDirectoryPath);
+      return listConversationSessions(transcriptDirectoryPath, (id) => {
+        const t = terminals.get(id);
+        return t
+          ? { tentacleId: t.tentacleId, tentacleName: t.tentacleName ?? null, providerSessionId: t.claudeSessionId ?? t.codexThreadId ?? null }
+          : null;
+      });
     },
 
     readConversationSession(sessionId: string) {
@@ -808,6 +845,9 @@ export const createTerminalRuntime = ({
       if (!session || disposition === "no-session") {
         return { status: "no-session" };
       }
+      sessionRuntime.reconcileDeliveryBlocked(sessionId);
+      const blocked = deliveryBlockedSubmitResult(sessions.get(sessionId));
+      if (blocked) return blocked;
       if (disposition === "busy") {
         return { status: "busy", tentacleId: session.tentacleId };
       }
@@ -831,6 +871,8 @@ export const createTerminalRuntime = ({
       sessionRuntime.recordInputSubmit(sessionId, submitId, submit.text);
       const delivered = sessionRuntime.writeInput(sessionId, submit.submitPayload);
       if (!delivered) {
+        const blockedAfterWrite = deliveryBlockedSubmitResult(sessions.get(sessionId));
+        if (blockedAfterWrite) return blockedAfterWrite;
         return { status: "no-session" };
       }
 
@@ -965,6 +1007,20 @@ export const createTerminalRuntime = ({
       return toTerminalSnapshot(terminal);
     },
 
+    updateTerminalClaudeSessionId(terminalId: string, claudeSessionId: string | null): TerminalSnapshot | null {
+      const terminal = terminals.get(terminalId);
+      if (!terminal) return null;
+      if (claudeSessionId !== null && !CLAUDE_SESSION_ID_PATTERN.test(claudeSessionId)) {
+        throw new RuntimeInputError("claudeSessionId must be a UUID.");
+      }
+      if (claudeSessionId === null) delete terminal.claudeSessionId;
+      else terminal.claudeSessionId = claudeSessionId;
+      persistRegistry();
+      const snapshot = toTerminalSnapshot(terminal);
+      broadcastTerminalEvent({ type: "terminal-updated", snapshot });
+      return snapshot;
+    },
+
     renameTerminal(terminalId: string, tentacleName: string): TerminalSnapshot | null {
       const terminal = terminals.get(terminalId);
       if (!terminal) {
@@ -982,7 +1038,7 @@ export const createTerminalRuntime = ({
       return toTerminalSnapshot(terminal);
     },
 
-    deleteTerminal(terminalId: string): boolean {
+    deleteTerminal(terminalId: string, options: { keepWorktree?: boolean } = {}): boolean {
       const terminal = terminals.get(terminalId);
       if (!terminal) {
         return false;
@@ -996,7 +1052,7 @@ export const createTerminalRuntime = ({
         }
 
         sessionRuntime.closeSession(cascadeTerminalId);
-        if (cascadeTerminal.workspaceMode === "worktree") {
+        if (cascadeTerminal.workspaceMode === "worktree" && !options.keepWorktree) {
           worktreeManager.removeTentacleWorktree(
             cascadeTerminal.worktreeId ?? cascadeTerminal.tentacleId,
           );
@@ -1045,6 +1101,10 @@ export const createTerminalRuntime = ({
 
     writeInput(terminalId: string, data: string): boolean {
       return sessionRuntime.writeInput(terminalId, data);
+    },
+
+    clearDeliveryBlocked(terminalId: string) {
+      return sessionRuntime.clearDeliveryBlockedIfIdleAndEmpty(terminalId);
     },
 
     resizeTerminal(terminalId: string, cols: number, rows: number): boolean {

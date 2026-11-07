@@ -11,7 +11,7 @@ export const ConsolePrimaryNav = ({
 }: ConsolePrimaryNavProps) => (
   <nav className="console-primary-nav" aria-label="Primary navigation">
     <div className="console-primary-nav-tabs">
-      {PRIMARY_NAV_ITEMS.map((item) => (
+      {PRIMARY_NAV_ITEMS.map((item, position) => (
         <button
           aria-current={item.index === activePrimaryNav ? "page" : undefined}
           className="console-primary-nav-tab"
@@ -22,7 +22,7 @@ export const ConsolePrimaryNav = ({
           }}
           type="button"
         >
-          [{item.index}] {item.label}
+          [{position + 1}] {item.label}
         </button>
       ))}
     </div>

@@ -17,7 +17,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { isIdleForHide } from "../app/canvas/hideIdle";
 import type { GraphNode } from "../app/canvas/types";
+import { horizontalWheelDelta } from "../app/canvas/wheelScroll";
 import { useAgentRuntimeStates } from "../app/hooks/useAgentRuntimeStates";
 import { useCanvasGraphData } from "../app/hooks/useCanvasGraphData";
 import { useCanvasTransform } from "../app/hooks/useCanvasTransform";
@@ -847,15 +849,56 @@ export const CanvasPrimaryView = ({
   );
   const sessionNodes = simulatedNodes.filter((n) => {
     if (n.type === "tentacle" || n.type === "octoboss") return false;
-    if (hideIdleTerminals && n.type === "inactive-session") return false;
-    if (
-      hideIdleTerminals &&
-      n.type === "active-session" &&
-      (n.agentState === "idle" || n.hasUserPrompt === false)
-    )
-      return false;
+    if (hideIdleTerminals && isIdleForHide(n)) return false;
     return true;
   });
+
+  // P31: horizontal scrolling of open tentacle panes (deltaX / shift+wheel) and middle-button drag.
+  useEffect(() => {
+    const el = terminalsPanelRef.current;
+    if (!el) return;
+    let drag: { x: number; left: number; id: number } | null = null;
+    const onWheel = (e: WheelEvent) => {
+      const dx = horizontalWheelDelta(e);
+      if (dx === 0) return;
+      el.scrollLeft += dx;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) e.preventDefault(); // no browser autoscroll icon
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 1) return;
+      drag = { x: e.clientX, left: el.scrollLeft, id: e.pointerId };
+      try { el.setPointerCapture(e.pointerId); } catch { /* jsdom */ }
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (!drag) return;
+      el.scrollLeft = drag.left - (e.clientX - drag.x);
+    };
+    const onPointerUp = () => {
+      if (!drag) return;
+      try { el.releasePointerCapture(drag.id); } catch { /* jsdom */ }
+      drag = null;
+    };
+    el.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    el.addEventListener("mousedown", onMouseDown, true);
+    el.addEventListener("pointerdown", onPointerDown, true);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      el.removeEventListener("wheel", onWheel, { capture: true });
+      el.removeEventListener("mousedown", onMouseDown, true);
+      el.removeEventListener("pointerdown", onPointerDown, true);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [openTentacles]);
 
   const handleFitView = useCallback(() => {
     fitAll(simulatedNodes);
@@ -893,10 +936,7 @@ export const CanvasPrimaryView = ({
       }
       if (
         hideIdleTerminals &&
-        (source.agentState === "idle" ||
-          source.hasUserPrompt === false ||
-          target.agentState === "idle" ||
-          target.hasUserPrompt === false)
+        (isIdleForHide(source) || isIdleForHide(target))
       ) {
         return null;
       }
@@ -1012,13 +1052,7 @@ export const CanvasPrimaryView = ({
                 .map((e) => nodesById.get(e.target))
                 .filter((n): n is GraphNode => {
                   if (!n) return false;
-                  if (hideIdleTerminals && n.type === "inactive-session") return false;
-                  if (
-                    hideIdleTerminals &&
-                    n.type === "active-session" &&
-                    (n.agentState === "idle" || n.hasUserPrompt === false)
-                  )
-                    return false;
+                  if (hideIdleTerminals && isIdleForHide(n)) return false;
                   return true;
                 });
 
@@ -1055,47 +1089,7 @@ export const CanvasPrimaryView = ({
 
         {/* Canvas toolbar — top-left action buttons */}
         <div className="canvas-toolbar" role="toolbar" aria-label="Canvas actions">
-          <button
-            type="button"
-            className="canvas-toolbar-btn"
-            onClick={() => {
-              const result = onCreateTerminal?.();
-              if (result && typeof result.then === "function") {
-                void result.then((agentId) => {
-                  if (agentId) setPendingOpenAgentId(agentId);
-                });
-              }
-            }}
-          >
-            <span className="canvas-toolbar-icon">
-              <TerminalIcon size={14} />
-            </span>
-            <span className="canvas-toolbar-label">Terminal</span>
-          </button>
-          <button
-            type="button"
-            className="canvas-toolbar-btn"
-            onClick={() => {
-              const result = onCreateWorktreeTerminal?.();
-              if (result && typeof result.then === "function") {
-                void result.then((agentId) => {
-                  if (agentId) setPendingOpenAgentId(agentId);
-                });
-              }
-            }}
-          >
-            <span className="canvas-toolbar-icon">
-              <GitBranch size={14} />
-            </span>
-            <span className="canvas-toolbar-label">Worktree</span>
-          </button>
-          <button type="button" className="canvas-toolbar-btn" onClick={onCreateTentacle}>
-            <span className="canvas-toolbar-icon">
-              <Hexagon size={14} />
-            </span>
-            <span className="canvas-toolbar-label">Tentacle</span>
-          </button>
-          <div className="canvas-toolbar-separator" />
+          
           <button type="button" className="canvas-toolbar-btn" onClick={handleFitView}>
             <span className="canvas-toolbar-icon">
               <Maximize size={14} />
@@ -1351,24 +1345,7 @@ export const CanvasPrimaryView = ({
                   </span>
                   New Terminal
                 </button>
-                <button
-                  type="button"
-                  className="canvas-context-menu-item"
-                  onClick={() => {
-                    setContextMenu(null);
-                    const result = onCreateWorktreeTerminal?.();
-                    if (result && typeof result.then === "function") {
-                      void result.then((agentId) => {
-                        if (agentId) setPendingOpenAgentId(agentId);
-                      });
-                    }
-                  }}
-                >
-                  <span className="canvas-context-menu-icon">
-                    <GitBranch size={14} />
-                  </span>
-                  New Worktree Terminal
-                </button>
+                
               </>
             )}
             {contextMenu.kind === "tentacle" && (
@@ -1383,24 +1360,7 @@ export const CanvasPrimaryView = ({
                   </span>
                   Create new agent
                 </button>
-                <button
-                  type="button"
-                  className="canvas-context-menu-item"
-                  onClick={() => {
-                    setContextMenu(null);
-                    const result = onCreateWorktreeTerminal?.();
-                    if (result && typeof result.then === "function") {
-                      void result.then((agentId) => {
-                        if (agentId) setPendingOpenAgentId(agentId);
-                      });
-                    }
-                  }}
-                >
-                  <span className="canvas-context-menu-icon">
-                    <GitBranch size={14} />
-                  </span>
-                  New Worktree Terminal
-                </button>
+                
                 <button
                   type="button"
                   className="canvas-context-menu-item"

@@ -79,11 +79,11 @@ describe("App shell and navigation", () => {
     render(<App />);
     await screen.findByRole("navigation", { name: "Primary navigation" });
 
-    fireEvent.keyDown(window, { key: "4" });
+    fireEvent.keyDown(window, { key: "3" });
 
     expect(
       screen.getByRole("button", {
-        name: "[4] Code Intel",
+        name: "[3] Code Intel",
       }),
     ).toHaveAttribute("aria-current", "page");
   });

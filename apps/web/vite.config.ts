@@ -16,7 +16,8 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    setupFiles: "./tests/setup.ts",
+    setupFiles: ["./tests/isolationGuard.ts", "./tests/setup.ts"],
     include: ["tests/**/*.test.tsx"],
   },
 } as never);
+

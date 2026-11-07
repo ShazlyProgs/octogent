@@ -575,6 +575,9 @@ describe("createApiServer", () => {
       {
         sessionId: "terminal-1",
         tentacleId: "terminal-1",
+        tentacleName: null,
+        providerSessionId: null,
+        providerSessionCount: expect.any(Number),
         // #45 Phase 3 [D9] auto-title fold: with no stored title, the title auto-derives from the
         // first user turn preview ("build export").
         title: "build export",
@@ -2917,6 +2920,29 @@ describe("createApiServer", () => {
     expect(deleteResponse.status).toBe(204);
     expect(gitClient.getWorktree(expectedWorktreePath)).toBeNull();
     expect(gitClient.hasBranch("octogent/terminal-1")).toBe(false);
+  });
+
+  it("P30 keepWorktree=true deletes the record but keeps worktree and branch", async () => {
+    const workspaceCwd = mkdtempSync(join(tmpdir(), "octogent-api-test-"));
+    temporaryDirectories.push(workspaceCwd);
+    const gitClient = new FakeGitClient();
+    const baseUrl = await startServer({ workspaceCwd, gitClient });
+    const createResponse = await fetch(`${baseUrl}/api/terminals`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceMode: "worktree" }),
+    });
+    expect(createResponse.status).toBe(201);
+    const expectedWorktreePath = join(workspaceCwd, ".octogent", "worktrees", "terminal-1");
+    const deleteResponse = await fetch(`${baseUrl}/api/terminals/terminal-1?keepWorktree=true`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+    expect(deleteResponse.status).toBe(204);
+    expect(gitClient.getWorktree(expectedWorktreePath)).not.toBeNull();
+    expect(gitClient.hasBranch("octogent/terminal-1")).toBe(true);
+    const list = (await (await fetch(`${baseUrl}/api/terminal-snapshots`)).json()) as Array<{ terminalId: string }>;
+    expect(list.some((t) => t.terminalId === "terminal-1")).toBe(false);
   });
 
   it("returns 409 and keeps tentacle state when worktree deletion fails", async () => {

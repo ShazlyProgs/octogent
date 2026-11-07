@@ -245,10 +245,18 @@ const buildConversationSummary = (
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
   const lastSessionEnd =
     [...events].reverse().find((event) => event.type === "session_end") ?? null;
+  // P31: group by provider session: previews/title follow the latest session_start.
+  const sessionStarts = events.filter((event) => event.type === "session_start");
+  const currentStart = sessionStarts.length > 0 ? sessionStarts[sessionStarts.length - 1] : null;
+  const currentUserTurns = currentStart
+    ? userTurns.filter((turn) => turn.startedAt >= currentStart.timestamp)
+    : userTurns;
+  const titleTurn = currentUserTurns[0] ?? userTurns[userTurns.length - 1] ?? null;
 
   return {
     sessionId,
-    tentacleId: firstEvent?.tentacleId ?? null,
+    tentacleId: lastEvent?.tentacleId ?? firstEvent?.tentacleId ?? null,
+    providerSessionCount: sessionStarts.length,
     // Placeholder — resolved from the metadata sidecar by readConversationSession (#45 Phase 3 D9).
     title: null,
     startedAt: firstEvent?.timestamp ?? null,
@@ -258,7 +266,7 @@ const buildConversationSummary = (
     turnCount: turns.length,
     userTurnCount: userTurns.length,
     assistantTurnCount: assistantTurns.length,
-    firstUserTurnPreview: userTurns.length > 0 ? (userTurns[0]?.content ?? null) : null,
+    firstUserTurnPreview: titleTurn?.content ?? null,
     lastUserTurnPreview:
       userTurns.length > 0 ? (userTurns[userTurns.length - 1]?.content ?? null) : null,
     lastAssistantTurnPreview:
@@ -367,8 +375,13 @@ export const readConversationSession = (
   };
 };
 
+export type ConversationRegistryLookup = (
+  terminalId: string,
+) => { tentacleId: string; tentacleName: string | null; providerSessionId: string | null } | null;
+
 export const listConversationSessions = (
   transcriptDirectoryPath: string,
+  lookup?: ConversationRegistryLookup,
 ): ConversationSessionSummary[] => {
   if (!existsSync(transcriptDirectoryPath)) {
     return [];
@@ -379,7 +392,7 @@ export const listConversationSessions = (
     .filter((sessionId): sessionId is string => sessionId !== null);
 
   const summaries = sessionIds
-    .map((sessionId) => {
+    .map((sessionId): ConversationSessionSummary | null => {
       const detail = readConversationSession(transcriptDirectoryPath, sessionId);
       // Skip sessions that have no actual conversation turns — these are
       // PTY sessions that were spawned but never received any user input.
@@ -389,7 +402,10 @@ export const listConversationSessions = (
 
       return {
         sessionId: detail.sessionId,
-        tentacleId: detail.tentacleId,
+        tentacleId: lookup?.(detail.sessionId)?.tentacleId ?? detail.tentacleId,
+        tentacleName: lookup?.(detail.sessionId)?.tentacleName ?? null,
+        providerSessionId: lookup?.(detail.sessionId)?.providerSessionId ?? null,
+        providerSessionCount: detail.providerSessionCount ?? 0,
         title: detail.title,
         startedAt: detail.startedAt,
         endedAt: detail.endedAt,

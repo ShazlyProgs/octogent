@@ -66,6 +66,8 @@ export const createHookProcessor = (deps: {
   deliverChannelMessages: (terminalId: string) => void;
   /** Flush any queued attach-document reference turns for this session (deliver-on-next-ready). */
   deliverPendingAttachments: (terminalId: string) => void;
+  /** Claude Stop hook: a finished turn may prove a dirty composer was consumed. */
+  onClaudeStop?: (terminalId: string) => void;
   onStateChange?: (
     terminalId: string,
     state: TerminalSession["agentState"],
@@ -81,6 +83,7 @@ export const createHookProcessor = (deps: {
     persistRegistry,
     deliverChannelMessages,
     deliverPendingAttachments,
+    onClaudeStop,
     onStateChange,
     vaultRoot,
   } = deps;
@@ -434,6 +437,11 @@ export const createHookProcessor = (deps: {
       return { ok: true };
     }
 
+    try {
+      onClaudeStop?.(matchedSessionId);
+    } catch {
+      /* stop notifications must not fail the hook */
+    }
     logVerbose(`[Hook] Matched session: ${matchedSessionId}, parsing transcript...`);
     const turns = parseClaudeTranscript(transcriptPath);
     logVerbose(`[Hook] Parsed ${turns?.length ?? 0} turns from transcript.`);

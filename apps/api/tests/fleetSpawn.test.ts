@@ -44,7 +44,7 @@ describe("loadFleetManifest", () => {
     const shipped = loadFleetManifest(PACKAGE_ROOT);
     expect(shipped.fleetId).toBe("csuite");
     expect(shipped.roles.length).toBe(11);
-    expect(shipped.profiles).toHaveLength(5);
+    expect(shipped.profiles).toHaveLength(7);
     const root = shipped.roles.filter((role) => role.parentRoleId === null);
     expect(root.map((role) => role.id)).toEqual(["fleet-ceo"]);
     // Every shipped role must have a staged seed folder with the three seed files.
