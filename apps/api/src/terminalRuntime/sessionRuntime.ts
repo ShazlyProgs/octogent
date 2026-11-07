@@ -477,7 +477,12 @@ export const createSessionRuntime = ({
             delete session.p33Pending;
             if (second.started !== false) return;
             const at = new Date().toISOString();
-            session.deliveryBlocked = { reason: "dirty_input_needs_clean", at };
+            const blockedText = pending.text;
+            session.deliveryBlocked = {
+              reason: "dirty_input_needs_clean",
+              at,
+              ...(blockedText ? { text: blockedText } : {}),
+            };
             appendDebugLog(session, `p33-delivery-blocked session=${terminalId} reason=dirty_input_needs_clean deliveredAt=${deliveredAt}`);
             try { onEnterRetryEvent?.({ type: "delivery_blocked", terminalId, provider: second.provider, deliveredAt, at, reason: "dirty_input_needs_clean", source: pending.source ?? "channel", ...(pending.source ? { probe: pending.text.slice(-80) } : {}) }); } catch { /* journal only */ }
           } catch { /* never break the runtime */ }
@@ -485,6 +490,116 @@ export const createSessionRuntime = ({
       } catch { /* never break the runtime */ }
     }, ms);
   };
+
+  const squashDeliveryProbe = (value: string) =>
+    value.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\s+/g, "");
+
+  const lastComposerLine = (session: TerminalSession): string => {
+    const lines = p33ScreenTail(session).split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index] ?? "";
+      if (squashDeliveryProbe(line).length > 0) return line;
+    }
+    return "";
+  };
+
+  /** True when the pending text is still the active composer line, not merely earlier scrollback. */
+  const composerStillHolds = (session: TerminalSession, text: string | undefined): boolean => {
+    if (!text) return false;
+    const probe = squashDeliveryProbe(text).slice(0, 48);
+    if (probe.length < 8) return false;
+    return squashDeliveryProbe(lastComposerLine(session)).includes(probe);
+  };
+
+  const isComposerVerifiablyEmpty = (session: TerminalSession): boolean => {
+    if (squashDeliveryProbe(p33ScreenTail(session)).length === 0) return false;
+    if (composerStillHolds(session, session.deliveryBlocked?.text)) return false;
+    const plain = lastComposerLine(session)
+      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+      .replace(/^[\s>│❯]+/u, "")
+      .trim();
+    return plain.length === 0;
+  };
+
+  const readDeliveryEvidence = (
+    terminalId: string,
+    session: TerminalSession,
+    blockMs: number,
+  ): { kind: "user_turn" | "turn_end"; atMs: number } | null => {
+    const { provider, path } = p27LogPath(terminalId, session);
+    if (!provider || !path) return null;
+    const tail = readTail(path);
+    if (tail === null) return null;
+    let found: { kind: "user_turn" | "turn_end"; atMs: number } | null = null;
+    for (const line of tail.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      let record: { timestamp?: string; type?: string; payload?: { type?: string } };
+      try {
+        record = JSON.parse(line) as typeof record;
+      } catch {
+        continue;
+      }
+      const atMs = Date.parse(record.timestamp ?? "");
+      if (!Number.isFinite(atMs) || atMs < blockMs - 2000) continue;
+      if (provider === "codex" && record.type === "event_msg") {
+        const event = record.payload?.type;
+        if (event === "user_message" || event === "task_started") found = { kind: "user_turn", atMs };
+        else if (event === "task_complete" || event === "turn_aborted") found = { kind: "turn_end", atMs };
+      } else if (provider === "claude") {
+        if (record.type === "user") found = { kind: "user_turn", atMs };
+        else if (record.type === "assistant") found = { kind: "turn_end", atMs };
+      }
+    }
+    return found;
+  };
+
+  /**
+   * Drop deliveryBlocked only with evidence the composer was consumed.
+   * A turn end (Codex task_complete, Claude assistant/Stop) also requires a verifiably empty composer line.
+   * Never writes to the PTY.
+   */
+  const maybeClearDeliveryBlocked = (
+    terminalId: string,
+    session: TerminalSession,
+    forced?: { kind: "user_turn" | "turn_end"; atMs: number },
+  ): boolean => {
+    const blocked = session.deliveryBlocked;
+    if (!blocked) return false;
+    if (composerStillHolds(session, blocked.text)) return false;
+    const blockMs = Date.parse(blocked.at);
+    const evidence = forced ?? readDeliveryEvidence(terminalId, session, Number.isFinite(blockMs) ? blockMs : 0);
+    if (!evidence || (Number.isFinite(blockMs) && evidence.atMs < blockMs - 2000)) return false;
+    if (evidence.kind === "turn_end" && !isComposerVerifiablyEmpty(session)) return false;
+    delete session.deliveryBlocked;
+    appendDebugLog(session, `p33-delivery-unblocked session=${terminalId} reason=${evidence.kind}`);
+    return true;
+  };
+
+  const clearDeliveryBlockedIfIdleAndEmpty = (
+    terminalId: string,
+  ): { ok: true } | { ok: false; error: string; reason: string } => {
+    const session = sessions.get(terminalId);
+    if (!session || !isSessionActive(terminalId, session)) {
+      return { ok: false, error: "Conversation session not found.", reason: "no_session" };
+    }
+    if (session.agentState !== "idle") {
+      return { ok: false, error: "Seat is not idle.", reason: "seat_not_idle" };
+    }
+    if (!session.deliveryBlocked) return { ok: true };
+    if (!isComposerVerifiablyEmpty(session)) {
+      return { ok: false, error: "Composer is not verifiably empty.", reason: "composer_not_empty" };
+    }
+    delete session.deliveryBlocked;
+    appendDebugLog(session, `p33-delivery-unblocked session=${terminalId} reason=operator`);
+    return { ok: true };
+  };
+
+  const noteProviderTurnEnded = (terminalId: string): boolean => {
+    const session = sessions.get(terminalId);
+    if (!session) return false;
+    return maybeClearDeliveryBlocked(terminalId, session, { kind: "turn_end", atMs: Date.now() });
+  };
+
   // P33b: typed ws-input submissions (Grok injectors) get the same one-Enter retry / block check.
   const p33bObserveTyped = (terminalId: string, session: TerminalSession, data: string) => {
     try {
@@ -893,6 +1008,11 @@ export const createSessionRuntime = ({
       timestamp: new Date().toISOString(),
     });
     session.statePollTimer = setInterval(() => {
+      try {
+        maybeClearDeliveryBlocked(sessionId, session);
+      } catch {
+        /* never break the poll */
+      }
       // A Codex delivery latch stays "processing" until reconcile or an explicit clear.
       // The 1.6s output idle poll must not drop it while the turn id is still armed.
       const watchdog = getCodexWatchdog(session);
@@ -1194,8 +1314,13 @@ export const createSessionRuntime = ({
     if (!session) {
       return false;
     }
-    // P33: once an Enter retry fails, automated delivery must not type more text
-    // into the dirty composer. This refusal sticks until stop+resume.
+    // A later provider turn can prove the composer was consumed. Clear first, then refuse
+    // if the dirty text is still on the composer line. Never submit that unknown text.
+    try {
+      maybeClearDeliveryBlocked(terminalId, session);
+    } catch {
+      /* refusal below still holds */
+    }
     if (session.deliveryBlocked !== undefined) {
       return false;
     }
@@ -1310,6 +1435,13 @@ export const createSessionRuntime = ({
     setDetectedAgentProvider,
     getEffectiveAgentProvider,
     getDeliveryBlocked,
+    reconcileDeliveryBlocked: (terminalId: string) => {
+      const session = sessions.get(terminalId);
+      if (!session) return false;
+      return maybeClearDeliveryBlocked(terminalId, session);
+    },
+    clearDeliveryBlockedIfIdleAndEmpty,
+    noteProviderTurnEnded,
     observeTypedInput,
     reconcileLatch,
     getLogTruth,

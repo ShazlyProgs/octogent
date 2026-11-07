@@ -132,6 +132,20 @@ export const handleConversationMessagesRoute: ApiRouteHandler = async (
     return true;
   }
 
+  if (result.status === "delivery-blocked") {
+    writeJson(
+      response,
+      409,
+      {
+        error: "Delivery blocked until the composer is clean.",
+        reason: result.reason,
+        deliveryBlockedReason: result.deliveryBlockedReason,
+      },
+      corsOrigin,
+    );
+    return true;
+  }
+
   if (result.status === "busy") {
     writeJson(
       response,

@@ -73,13 +73,25 @@ export const MAX_CHILDREN_PER_PARENT = 9;
 /**
  * Result of submitting a chat turn into a conversation (#45 Phase 3 [D9] send-message adapter).
  * Discriminated so the HTTP route maps each case to the legacy-parity status code without a
- * try/catch: accepted → 202, busy → 409, no-session → 404, invalid-content → 400.
+ * try/catch: accepted → 202, busy → 409, delivery-blocked → 409, no-session → 404, invalid-content → 400.
  */
 export type SubmitConversationMessageResult =
   | { status: "accepted"; submitId: string; tentacleId: string; text: string }
   | { status: "busy"; tentacleId: string }
+  | { status: "delivery-blocked"; reason: "delivery_blocked"; deliveryBlockedReason: string }
   | { status: "no-session" }
   | { status: "invalid-content"; error: string };
+
+export const deliveryBlockedSubmitResult = (
+  session: { deliveryBlocked?: { reason: string } } | null | undefined,
+): Extract<SubmitConversationMessageResult, { status: "delivery-blocked" }> | null => {
+  if (!session?.deliveryBlocked) return null;
+  return {
+    status: "delivery-blocked",
+    reason: "delivery_blocked",
+    deliveryBlockedReason: session.deliveryBlocked.reason,
+  };
+};
 
 /**
  * Result of starting a chat conversation (#45 Phase 3 [D9] create-conversation adapter).
@@ -308,6 +320,9 @@ export const createTerminalRuntime = ({
     persistRegistry,
     deliverChannelMessages: channelMessaging.deliverChannelMessages,
     deliverPendingAttachments: flushPendingAttachmentDeliveries,
+    onClaudeStop: (terminalId: string) => {
+      sessionRuntime.noteProviderTurnEnded(terminalId);
+    },
     onStateChange: broadcastTerminalStateChanged,
     ...(vaultRoot ? { vaultRoot } : {}),
   });
@@ -437,6 +452,7 @@ export const createTerminalRuntime = ({
     autoRenamePromptContext,
     metadata,
     cwdScope: requestedCwdScope,
+    codexThreadId,
   }: {
     terminalId?: string;
     tentacleId?: string;
@@ -452,6 +468,7 @@ export const createTerminalRuntime = ({
     autoRenamePromptContext?: string;
     metadata?: Record<string, string>;
     cwdScope?: "vault";
+    codexThreadId?: string;
   }): TerminalSnapshot => {
     // Enforce max children per parent.
     if (parentTerminalId) {
@@ -496,6 +513,7 @@ export const createTerminalRuntime = ({
       createdAt: new Date().toISOString(),
       workspaceMode,
       agentProvider: agentProvider ?? DEFAULT_AGENT_PROVIDER,
+      ...(codexThreadId ? { codexThreadId } : {}),
       ...(initialPrompt ? { initialPrompt } : {}),
       ...(initialInputDraft ? { initialInputDraft } : {}),
       ...(initialPrompt ? { lastActiveAt: new Date().toISOString() } : {}),
@@ -827,6 +845,9 @@ export const createTerminalRuntime = ({
       if (!session || disposition === "no-session") {
         return { status: "no-session" };
       }
+      sessionRuntime.reconcileDeliveryBlocked(sessionId);
+      const blocked = deliveryBlockedSubmitResult(sessions.get(sessionId));
+      if (blocked) return blocked;
       if (disposition === "busy") {
         return { status: "busy", tentacleId: session.tentacleId };
       }
@@ -850,6 +871,8 @@ export const createTerminalRuntime = ({
       sessionRuntime.recordInputSubmit(sessionId, submitId, submit.text);
       const delivered = sessionRuntime.writeInput(sessionId, submit.submitPayload);
       if (!delivered) {
+        const blockedAfterWrite = deliveryBlockedSubmitResult(sessions.get(sessionId));
+        if (blockedAfterWrite) return blockedAfterWrite;
         return { status: "no-session" };
       }
 
@@ -1078,6 +1101,10 @@ export const createTerminalRuntime = ({
 
     writeInput(terminalId: string, data: string): boolean {
       return sessionRuntime.writeInput(terminalId, data);
+    },
+
+    clearDeliveryBlocked(terminalId: string) {
+      return sessionRuntime.clearDeliveryBlockedIfIdleAndEmpty(terminalId);
     },
 
     resizeTerminal(terminalId: string, cols: number, rows: number): boolean {

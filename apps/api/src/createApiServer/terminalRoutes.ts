@@ -438,6 +438,37 @@ export const handleTerminalSessionRoute: ApiRouteHandler = async (
   return true;
 };
 
+const DELIVERY_BLOCK_CLEAR_PATH = /^\/api\/terminals\/([^/]+)\/delivery-block\/clear$/;
+
+/**
+ * Operator clear of deliveryBlocked. Idle seat and a verifiably empty composer only.
+ * Does not write to the PTY.
+ */
+export const handleTerminalDeliveryBlockClearRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const match = requestUrl.pathname.match(DELIVERY_BLOCK_CLEAR_PATH);
+  if (!match) return false;
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const terminalId = decodeURIComponent(match[1] ?? "");
+  const result = runtime.clearDeliveryBlocked(terminalId);
+  if (!result.ok && result.reason === "no_session") {
+    writeJson(response, 404, { error: result.error, reason: result.reason }, corsOrigin);
+    return true;
+  }
+  if (!result.ok) {
+    writeJson(response, 409, { error: result.error, reason: result.reason }, corsOrigin);
+    return true;
+  }
+  const snapshot = runtime.listTerminalSnapshots().find((row) => row.terminalId === terminalId) ?? null;
+  writeJson(response, 200, { ok: true, terminalId, deliveryBlocked: snapshot?.deliveryBlocked === true }, corsOrigin);
+  return true;
+};
+
 export const handleTerminalItemRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
   { runtime, workspaceCwd, projectStateDir },
