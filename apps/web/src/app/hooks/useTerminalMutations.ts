@@ -201,7 +201,7 @@ export const useTerminalMutations = ({
       setLoadError(null);
       setIsDeletingTerminalId(terminalId);
       const encodedTerminalId = encodeURIComponent(terminalId);
-      const response = await fetch(`/api/terminals/${encodedTerminalId}`, {
+      const response = await fetch(`/api/terminals/${encodedTerminalId}?keepWorktree=true`, {
         method: "DELETE",
         headers: {
           Accept: "application/json",

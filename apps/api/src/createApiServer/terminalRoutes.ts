@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { readDeckTentacles } from "../deck/readDeckTentacles";
+import { readDeckTentacles, removeDeckStateEntry } from "../deck/readDeckTentacles";
+import { isDeleteTombstoneEnabled, quarantineDeckTentacleFolder } from "../deck/tentacleTombstones"; // P41
 import { resolvePrompt } from "../prompts";
 import {
   RuntimeInputError,
@@ -46,6 +47,15 @@ export const handleTerminalSnapshotsRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
   { runtime },
 ) => {
+  // P38: GET /api/terminal-snapshots/:id (OCTO_API_SNAPSHOT_ITEM=1) so wakers get JSON, not the SPA page.
+  const p38Item = /^\/api\/terminal-snapshots\/([^/]+)$/.exec(requestUrl.pathname);
+  if (p38Item && process.env.OCTO_API_SNAPSHOT_ITEM === "1") {
+    if (request.method !== "GET") { writeMethodNotAllowed(response, corsOrigin); return true; }
+    const id = decodeURIComponent(p38Item[1] as string);
+    const one = (runtime.listTerminalSnapshots() as Array<{ terminalId: string }>).find((s) => s.terminalId === id);
+    if (!one) writeJson(response, 404, { error: `Unknown terminal ${id}` }, corsOrigin); else writeJson(response, 200, one, corsOrigin);
+    return true;
+  }
   if (requestUrl.pathname !== "/api/terminal-snapshots") {
     return false;
   }
@@ -329,7 +339,31 @@ export const handleTerminalLifecycleRoute: ApiRouteHandler = async (
         return true;
       }
       prompt = promptValue.trim();
-      const providerResult = parseTerminalAgentProvider(bodyReadResult.payload);
+      const claudePayload = bodyReadResult.payload as Record<string, unknown> | null;
+  if (claudePayload && typeof claudePayload === "object" && Object.hasOwn(claudePayload, "claudeSessionId")) {
+    const value = claudePayload.claudeSessionId;
+    if (value !== null && typeof value !== "string") {
+      writeJson(response, 400, { error: "claudeSessionId must be a UUID string or null." }, corsOrigin);
+      return true;
+    }
+    try {
+      const payload = runtime.updateTerminalClaudeSessionId(terminalId, value === null ? null : value.trim());
+      if (!payload) {
+        writeJson(response, 404, { error: "Terminal not found." }, corsOrigin);
+        return true;
+      }
+      writeJson(response, 200, payload, corsOrigin);
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeInputError) {
+        writeJson(response, 400, { error: error.message }, corsOrigin);
+        return true;
+      }
+      throw error;
+    }
+  }
+
+  const providerResult = parseTerminalAgentProvider(bodyReadResult.payload);
       if (providerResult.error) {
         writeJson(response, 400, { error: providerResult.error }, corsOrigin);
         return true;
@@ -358,9 +392,55 @@ export const handleTerminalLifecycleRoute: ApiRouteHandler = async (
   }
 };
 
-export const handleTerminalItemRoute: ApiRouteHandler = async (
+
+const TERMINAL_SESSION_PATH_PATTERN = /^\/api\/terminals\/([^/]+)\/session$/;
+
+/** P42: store-only session id patch. Never respawns. Requires OCTO_FRESH_START_RESET_SESSION=1. */
+export const handleTerminalSessionRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
   { runtime },
+) => {
+  const match = requestUrl.pathname.match(TERMINAL_SESSION_PATH_PATTERN);
+  if (!match) return false;
+  if (request.method !== "PATCH") { writeMethodNotAllowed(response, corsOrigin); return true; }
+  const terminalId = decodeURIComponent(match[1] ?? "");
+  const body = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!body.ok) return true;
+  const value = body.payload as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    writeJson(response, 400, { error: "Body must be a JSON object." }, corsOrigin); return true;
+  }
+  const patch: { codexThreadId?: string | null; claudeSessionId?: string | null; clear?: boolean } = {};
+  if (value.clear === true) patch.clear = true;
+  if (Object.hasOwn(value, "codexThreadId")) {
+    if (value.codexThreadId !== null && typeof value.codexThreadId !== "string") {
+      writeJson(response, 400, { error: "codexThreadId must be a UUID string or null." }, corsOrigin); return true;
+    }
+    patch.codexThreadId = value.codexThreadId === null ? null : String(value.codexThreadId).trim();
+  }
+  if (Object.hasOwn(value, "claudeSessionId")) {
+    if (value.claudeSessionId !== null && typeof value.claudeSessionId !== "string") {
+      writeJson(response, 400, { error: "claudeSessionId must be a UUID string or null." }, corsOrigin); return true;
+    }
+    patch.claudeSessionId = value.claudeSessionId === null ? null : String(value.claudeSessionId).trim();
+  }
+  if (!patch.clear && patch.codexThreadId === undefined && patch.claudeSessionId === undefined) {
+    writeJson(response, 400, { error: "Provide clear:true and/or codexThreadId/claudeSessionId." }, corsOrigin); return true;
+  }
+  try {
+    const payload = (runtime as { updateTerminalSessionIds?: Function }).updateTerminalSessionIds?.(terminalId, patch);
+    if (!payload) { writeJson(response, 404, { error: "Terminal not found." }, corsOrigin); return true; }
+    writeJson(response, 200, payload, corsOrigin);
+  } catch (error) {
+    if (error instanceof RuntimeInputError) { writeJson(response, 400, { error: error.message }, corsOrigin); return true; }
+    throw error;
+  }
+  return true;
+};
+
+export const handleTerminalItemRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime, workspaceCwd, projectStateDir },
 ) => {
   const renameMatch = requestUrl.pathname.match(TERMINAL_ITEM_PATH_PATTERN);
   if (!renameMatch) {
@@ -375,7 +455,19 @@ export const handleTerminalItemRoute: ApiRouteHandler = async (
   const terminalId = decodeURIComponent(renameMatch[1] ?? "");
   if (request.method === "DELETE") {
     try {
-      runtime.deleteTerminal(terminalId);
+      // P30: keepWorktree=true removes only the record and runtime; never git worktree/branch deletes.
+      const keepWorktree = requestUrl.searchParams.get("keepWorktree") === "true";
+      const p41Before = isDeleteTombstoneEnabled() ? runtime.listTerminalSnapshots() : [];
+      runtime.deleteTerminal(terminalId, { keepWorktree });
+      if (p41Before.length > 0) {
+        // P41: any tentacle left with zero terminals is removed from the deck too, so it never shows as a root ghost.
+        const after = new Set(runtime.listTerminalSnapshots().map((t) => t.tentacleId));
+        const gone = new Set(p41Before.map((t) => t.tentacleId).filter((id) => !after.has(id)));
+        for (const tentacleId of gone) {
+          try { quarantineDeckTentacleFolder(workspaceCwd, projectStateDir, tentacleId, `terminal-delete:${terminalId}`); removeDeckStateEntry(projectStateDir, tentacleId); }
+          catch (error) { console.error("P41 tombstone failed:", error); }
+        }
+      }
       writeNoContent(response, 204, corsOrigin);
       return true;
     } catch (error) {

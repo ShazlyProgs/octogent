@@ -43,7 +43,7 @@ import {
   loadTerminalRegistry,
   pruneUiStateTerminalReferences,
 } from "./terminalRuntime/registry";
-import { createSessionRuntime } from "./terminalRuntime/sessionRuntime";
+import { CLAUDE_SESSION_ID_PATTERN, createSessionRuntime } from "./terminalRuntime/sessionRuntime";
 import { createDefaultGitClient } from "./terminalRuntime/systemClients";
 import type { DirectSessionListener } from "./terminalRuntime/types";
 import {
@@ -370,6 +370,20 @@ export const createTerminalRuntime = ({
       ...(terminal.parentTerminalId ? { parentTerminalId: terminal.parentTerminalId } : {}),
       ...(terminal.metadata ? { metadata: { ...terminal.metadata } } : {}),
       ...(session ? { agentRuntimeState: session.agentState } : {}),
+      ...(() => {
+        const blocked = session?.deliveryBlocked;
+        return blocked ? { deliveryBlocked: true as const, deliveryBlockedReason: blocked.reason } : {};
+      })(),
+      ...(() => {
+        const lt = sessionRuntime.getLogTruth?.(terminal.terminalId);
+        return lt
+          ? {
+              stateSource: lt.stateSource,
+              stateAgeSec: lt.stateAgeSec,
+              logTruth: lt,
+            }
+          : {};
+      })(),
     };
   };
 
@@ -552,7 +566,12 @@ export const createTerminalRuntime = ({
     allocateTerminalId,
 
     listConversationSessions() {
-      return listConversationSessions(transcriptDirectoryPath);
+      return listConversationSessions(transcriptDirectoryPath, (id) => {
+        const t = terminals.get(id);
+        return t
+          ? { tentacleId: t.tentacleId, tentacleName: t.tentacleName ?? null, providerSessionId: t.claudeSessionId ?? t.codexThreadId ?? null }
+          : null;
+      });
     },
 
     readConversationSession(sessionId: string) {
@@ -965,6 +984,20 @@ export const createTerminalRuntime = ({
       return toTerminalSnapshot(terminal);
     },
 
+    updateTerminalClaudeSessionId(terminalId: string, claudeSessionId: string | null): TerminalSnapshot | null {
+      const terminal = terminals.get(terminalId);
+      if (!terminal) return null;
+      if (claudeSessionId !== null && !CLAUDE_SESSION_ID_PATTERN.test(claudeSessionId)) {
+        throw new RuntimeInputError("claudeSessionId must be a UUID.");
+      }
+      if (claudeSessionId === null) delete terminal.claudeSessionId;
+      else terminal.claudeSessionId = claudeSessionId;
+      persistRegistry();
+      const snapshot = toTerminalSnapshot(terminal);
+      broadcastTerminalEvent({ type: "terminal-updated", snapshot });
+      return snapshot;
+    },
+
     renameTerminal(terminalId: string, tentacleName: string): TerminalSnapshot | null {
       const terminal = terminals.get(terminalId);
       if (!terminal) {
@@ -982,7 +1015,7 @@ export const createTerminalRuntime = ({
       return toTerminalSnapshot(terminal);
     },
 
-    deleteTerminal(terminalId: string): boolean {
+    deleteTerminal(terminalId: string, options: { keepWorktree?: boolean } = {}): boolean {
       const terminal = terminals.get(terminalId);
       if (!terminal) {
         return false;
@@ -996,7 +1029,7 @@ export const createTerminalRuntime = ({
         }
 
         sessionRuntime.closeSession(cascadeTerminalId);
-        if (cascadeTerminal.workspaceMode === "worktree") {
+        if (cascadeTerminal.workspaceMode === "worktree" && !options.keepWorktree) {
           worktreeManager.removeTentacleWorktree(
             cascadeTerminal.worktreeId ?? cascadeTerminal.tentacleId,
           );

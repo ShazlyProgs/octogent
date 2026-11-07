@@ -35,8 +35,10 @@ import {
   handleDeckVaultFileRoute,
 } from "./deckRoutes";
 import { handleTentacleGitPullRequestRoute, handleTentacleGitRoute } from "./gitRoutes";
+import { handleCodexProviderEventRoute } from "./providerEventRoutes";
 import {
   handleChannelMessagesRoute,
+  handleChannelSupersedeRoute,
   handleHookRoute,
   handlePromptItemRoute,
   handlePromptsCollectionRoute,
@@ -65,6 +67,7 @@ import {
 import {
   handleTerminalItemRoute,
   handleTerminalLifecycleRoute,
+  handleTerminalSessionRoute,
   handleTerminalSnapshotsRoute,
   handleTerminalsCollectionRoute,
 } from "./terminalRoutes";
@@ -112,7 +115,8 @@ type CreateApiRequestHandlerOptions = {
 };
 
 const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
-  ["channels", [handleChannelMessagesRoute]],
+  ["channels", [handleChannelSupersedeRoute, handleChannelMessagesRoute]],
+  ["provider-events", [handleCodexProviderEventRoute]],
   ["hooks", [handleHookRoute]],
   ["prompts", [handlePromptsCollectionRoute, handlePromptItemRoute]],
   [
@@ -154,7 +158,7 @@ const API_ROUTE_MAP: ReadonlyMap<string, readonly ApiRouteHandler[]> = new Map([
   ],
   [
     "terminals",
-    [handleTerminalsCollectionRoute, handleTerminalLifecycleRoute, handleTerminalItemRoute],
+    [handleTerminalsCollectionRoute, handleTerminalLifecycleRoute, handleTerminalSessionRoute, handleTerminalItemRoute],
   ],
   ["tentacles", [handleTentacleGitRoute, handleTentacleGitPullRequestRoute]],
   ["code-intel", [handleCodeIntelEventsRoute]],

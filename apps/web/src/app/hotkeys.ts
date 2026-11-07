@@ -1,4 +1,4 @@
-import { PRIMARY_NAV_MAX, type PrimaryNavIndex } from "./constants";
+import { PRIMARY_NAV_ITEMS, PRIMARY_NAV_MAX, type PrimaryNavIndex } from "./constants";
 const MAX_TICKER_QUERY_LENGTH = 16;
 const TICKER_QUERY_ALLOWED_PATTERN = /[^A-Z0-9._/-]/g;
 
@@ -24,7 +24,7 @@ export const parsePrimaryNavKey = (key: string): PrimaryNavIndex | null => {
     return null;
   }
 
-  return n as PrimaryNavIndex;
+  return (PRIMARY_NAV_ITEMS[n - 1]?.index ?? null) as PrimaryNavIndex | null;
 };
 
 export const normalizeTickerQueryInput = (value: string): string =>

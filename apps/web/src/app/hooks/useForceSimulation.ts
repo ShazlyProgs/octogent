@@ -317,3 +317,7 @@ export const useForceSimulation = ({
 
   return { simulatedNodes: snapshot, pinNode, unpinNode, moveNode, reheat };
 };
+
+/** P40: per-node render key; includes logState so a log-truth-only change re-renders the node. */
+export const nodeContentKey = (n: { id: string; hasUserPrompt?: boolean; agentState?: string; agentRuntimeState?: string; waitingToolName?: string; blockedDeliveryCount?: number; heldActivity?: boolean; logState?: string; color: string; label: string }): string =>
+  [n.id, n.hasUserPrompt ?? "", n.agentState ?? "", n.agentRuntimeState ?? "", n.waitingToolName ?? "", n.blockedDeliveryCount ?? 0, n.heldActivity === true, n.logState ?? "", n.color, n.label].join("\t");

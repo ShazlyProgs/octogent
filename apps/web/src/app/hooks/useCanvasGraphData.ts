@@ -213,6 +213,16 @@ export const useCanvasGraphData = ({
   const refreshDeckTentacles = useCallback(async () => {
     await fetchDeckTentacles();
   }, [fetchDeckTentacles]);
+  // P41: when a tentacle loses its last terminal (delete), re-read the deck so no ghost root node lingers.
+  const p41TentacleKey = [...new Set(columns.map((t) => t.tentacleId))].sort().join("|");
+  const p41PrevKey = useRef(p41TentacleKey);
+  useEffect(() => {
+    if (!enabled) return;
+    const prev = p41PrevKey.current.split("|").filter(Boolean);
+    p41PrevKey.current = p41TentacleKey;
+    const now = new Set(p41TentacleKey.split("|"));
+    if (prev.some((id) => !now.has(id))) void fetchDeckTentacles();
+  }, [enabled, fetchDeckTentacles, p41TentacleKey]);
 
   const activeTerminalIds = new Set(columns.map((terminal) => terminal.terminalId));
 

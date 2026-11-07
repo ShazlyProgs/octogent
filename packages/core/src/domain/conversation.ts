@@ -17,6 +17,11 @@ export type ConversationTranscriptEvent = {
 export type ConversationSessionSummary = {
   sessionId: string;
   tentacleId: string | null;
+  /** P31: current tentacle name and provider session/thread from the live registry. */
+  tentacleName?: string | null;
+  providerSessionId?: string | null;
+  /** P31: number of provider sessions in this terminal's transcript; previews follow the latest. */
+  providerSessionCount?: number;
   /**
    * The conversation's display title. Resolves to an explicitly stored title (set by the
    * rename-conversation / generate-title adapters, #45 Phase 3 [D9]) when present, otherwise a

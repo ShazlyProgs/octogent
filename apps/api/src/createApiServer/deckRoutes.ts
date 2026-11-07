@@ -14,6 +14,7 @@ import {
   updateDeckTentacleSuggestedSkills,
 } from "../deck/readDeckTentacles";
 import { resolvePrompt } from "../prompts";
+import { isDeleteTombstoneEnabled } from "../deck/tentacleTombstones"; // P41
 import { MAX_CHILDREN_PER_PARENT, RuntimeInputError } from "../terminalRuntime";
 import type { ApiRouteHandler } from "./routeHelpers";
 import {
@@ -157,7 +158,7 @@ const DECK_TENTACLE_ITEM_PATTERN = /^\/api\/deck\/tentacles\/([^/]+)$/;
 
 export const handleDeckTentacleItemRoute: ApiRouteHandler = async (
   { request, response, requestUrl, corsOrigin },
-  { workspaceCwd, projectStateDir },
+  { workspaceCwd, projectStateDir, runtime },
 ) => {
   const match = requestUrl.pathname.match(DECK_TENTACLE_ITEM_PATTERN);
   if (!match) return false;
@@ -169,6 +170,12 @@ export const handleDeckTentacleItemRoute: ApiRouteHandler = async (
 
   const tentacleId = decodeURIComponent(match[1] as string);
   const result = deleteDeckTentacle(workspaceCwd, tentacleId, projectStateDir);
+  if (result.ok && isDeleteTombstoneEnabled()) {
+    // P41: remove derived terminals too (record + runtime only; worktrees/branches stay on disk)
+    for (const t of runtime.listTerminalSnapshots()) {
+      if (t.tentacleId === tentacleId) { try { runtime.deleteTerminal(t.terminalId, { keepWorktree: true }); } catch { /* P41 best effort */ } }
+    }
+  }
   if (!result.ok) {
     writeJson(response, 404, { error: result.error }, corsOrigin);
     return true;

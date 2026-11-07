@@ -266,6 +266,78 @@ export const handlePromptItemRoute: ApiRouteHandler = async (
 
 // ─── Channel routes ───────────────────────────────────────────────────────
 
+const CHANNEL_SUPERSEDE_PATH_PATTERN = /^\/api\/channels\/([^/]+)\/messages\/supersede$/;
+
+export const handleChannelSupersedeRoute: ApiRouteHandler = async (
+  { request, response, requestUrl, corsOrigin },
+  { runtime },
+) => {
+  const match = requestUrl.pathname.match(CHANNEL_SUPERSEDE_PATH_PATTERN);
+  if (!match) return false;
+  const terminalId = decodeURIComponent(match[1] ?? "");
+  if (request.method !== "POST") {
+    writeMethodNotAllowed(response, corsOrigin);
+    return true;
+  }
+  const bodyReadResult = await readJsonBodyOrWriteError(request, response, corsOrigin);
+  if (!bodyReadResult.ok) return true;
+  const body = bodyReadResult.payload as Record<string, unknown> | null;
+  const ids = body?.messageIds;
+  const by = typeof body?.supersededBy === "string" ? body.supersededBy.trim() : "";
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  const custodyRef = typeof body?.custodyRef === "string" ? body.custodyRef.trim() : "";
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    ids.some((id) => typeof id !== "string" || !/^msg-\d+$/.test(id)) ||
+    new Set(ids).size !== ids.length ||
+    !by ||
+    !reason
+  ) {
+    writeJson(response, 400, { error: "messageIds (msg-N, unique), supersededBy and reason are required." }, corsOrigin);
+    return true;
+  }
+  const expected = body?.expectedSession as Record<string, unknown> | null | undefined;
+  const stringFields = ["instanceId", "projectStateId", "tentacleId", "startedAt"] as const;
+  if (
+    !expected ||
+    typeof expected !== "object" ||
+    Array.isArray(expected) ||
+    stringFields.some((key) => typeof expected[key] !== "string" || !(expected[key] as string).trim()) ||
+    !Number.isSafeInteger(expected.processId)
+  ) {
+    writeJson(response, 400, { error: "Malformed expectedSession." }, corsOrigin);
+    return true;
+  }
+  const matches = runtime.listTerminalSnapshots().filter((row) => row.terminalId === terminalId);
+  const snapshot = matches.length === 1 ? matches[0] : undefined;
+  const identity = snapshot as (typeof snapshot & Record<(typeof stringFields)[number] | "processId", unknown>) | undefined;
+  if (!identity || stringFields.some((key) => identity[key] !== expected[key]) || identity.processId !== expected.processId) {
+    writeJson(response, 409, { error: "Expected session is not the current session." }, corsOrigin);
+    return true;
+  }
+  const result = runtime.supersedeChannelMessages(terminalId, ids as string[], {
+    by,
+    reason,
+    ...(custodyRef ? { custodyRef } : {}),
+  });
+  if (!result.ok) {
+    writeJson(response, 409, { error: result.error, messageIds: result.messageIds ?? [] }, corsOrigin);
+    return true;
+  }
+  writeJson(
+    response,
+    200,
+    {
+      terminalId,
+      superseded: result.superseded.map((m) => ({ messageId: m.messageId, superseded: m.superseded })),
+      alreadySuperseded: result.alreadySuperseded,
+    },
+    corsOrigin,
+  );
+  return true;
+};
+
 const CHANNEL_MESSAGES_PATH_PATTERN = /^\/api\/channels\/([^/]+)\/messages$/;
 
 export const handleChannelMessagesRoute: ApiRouteHandler = async (
@@ -305,7 +377,33 @@ export const handleChannelMessagesRoute: ApiRouteHandler = async (
     return true;
   }
 
-  const message = runtime.sendChannelMessage(terminalId, fromTerminalId, content);
+  const guarded = body?.immediateOnly === true;
+  if (guarded) {
+    const current = runtime.listTerminalSnapshots().find((row) => row.terminalId === terminalId);
+    if (current?.deliveryBlocked) {
+      writeJson(
+        response,
+        409,
+        {
+          error: "Delivery blocked: input line is dirty; stop+resume the seat first.",
+          reason: current.deliveryBlockedReason ?? "dirty_input_needs_clean",
+        },
+        corsOrigin,
+      );
+      return true;
+    }
+  }
+  const supersedeKey =
+    body && typeof body.supersedeKey === "string" && body.supersedeKey.trim()
+      ? body.supersedeKey.trim().slice(0, 200)
+      : undefined;
+  const sendOptions = { ...(guarded ? { immediateOnly: true } : {}), ...(supersedeKey ? { supersedeKey } : {}) };
+  const message = runtime.sendChannelMessage(
+    terminalId,
+    fromTerminalId,
+    content,
+    Object.keys(sendOptions).length > 0 ? sendOptions : undefined,
+  );
   if (!message) {
     writeJson(response, 404, { error: "Target terminal not found." }, corsOrigin);
     return true;

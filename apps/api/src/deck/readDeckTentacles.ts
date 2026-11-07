@@ -22,6 +22,8 @@ import {
   readAvailableClaudeSkills,
 } from "../claudeSkills";
 import { markTentaclesInitialized } from "../setupState";
+// P41: tombstones for deleted tentacles (OCTO_DELETE_TOMBSTONE=1)
+import { clearTentacleTombstone, isDeleteTombstoneEnabled, quarantineDeckTentacleFolder, readTentacleTombstones } from "./tentacleTombstones";
 
 const TENTACLES_DIR = ".octogent/tentacles";
 const DECK_STATE_PATH = ".octogent/state/deck.json";
@@ -214,8 +216,10 @@ export const readDeckTentacles = (
 
   const deckState = readDeckState(projectStateDir ?? join(workspaceCwd, ".octogent"));
   const results: DeckTentacleSummary[] = [];
+  const p41Stones = isDeleteTombstoneEnabled() ? readTentacleTombstones(projectStateDir ?? join(workspaceCwd, ".octogent")) : {};
 
   for (const entry of entries) {
+    if (Object.hasOwn(p41Stones, entry)) continue; // P41: deleted tentacle stays gone
     const entryPath = join(tentaclesRoot, entry);
     if (!statSync(entryPath).isDirectory()) continue;
 
@@ -223,7 +227,7 @@ export const readDeckTentacles = (
     const contextMdPath = join(entryPath, "CONTEXT.md");
     if (!existsSync(contextMdPath)) continue;
 
-    let agentInfo: { displayName: string; description: string };
+    let agentInfo: { displayName: string; description: string; suggestedSkills?: string[] };
     try {
       const content = readFileSync(contextMdPath, "utf-8");
       const parsed = parseContextMd(content);
@@ -279,7 +283,7 @@ export const readDeckTentacles = (
       todoTotal,
       todoDone,
       todoItems,
-      suggestedSkills: agentInfo.suggestedSkills,
+      suggestedSkills: agentInfo.suggestedSkills ?? [],
     });
   }
 
@@ -517,6 +521,7 @@ export const createDeckTentacle = (
   if (name.includes("..") || name.includes("/")) {
     return { ok: false, error: "Name contains invalid characters" };
   }
+  if (isDeleteTombstoneEnabled()) { try { clearTentacleTombstone(stateDir, name); } catch { /* P41 */ } } // P41: explicit re-create revives
 
   const tentacleDir = join(workspaceCwd, TENTACLES_DIR, name);
   if (existsSync(tentacleDir)) {
@@ -611,7 +616,11 @@ export const deleteDeckTentacle = (
     return { ok: false, error: "Tentacle not found" };
   }
 
-  rmSync(tentacleDir, { recursive: true, force: true });
+  if (isDeleteTombstoneEnabled()) {
+    quarantineDeckTentacleFolder(workspaceCwd, stateDir, tentacleId, "deck-delete"); // P41: move, never rm
+  } else {
+    rmSync(tentacleDir, { recursive: true, force: true });
+  }
 
   // Remove from deck state
   const deckState = readDeckState(stateDir);
@@ -619,4 +628,12 @@ export const deleteDeckTentacle = (
   writeDeckState(stateDir, deckState);
 
   return { ok: true };
+};
+
+/** P41: drop a tentacle's deck.json entry (folder handled by quarantineDeckTentacleFolder). */
+export const removeDeckStateEntry = (projectStateDir: string, tentacleId: string): void => {
+  const deckState = readDeckState(projectStateDir);
+  if (!Object.hasOwn(deckState.tentacles, tentacleId)) return;
+  delete deckState.tentacles[tentacleId];
+  writeDeckState(projectStateDir, deckState);
 };

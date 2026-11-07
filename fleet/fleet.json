@@ -154,6 +154,24 @@
       "promptTemplate": "bound-service-representation",
       "seedDir": "fleet/tentacles/sara",
       "kind": "bound-service"
+    },
+    {
+      "id": "security-review-engineer-1",
+      "name": "Security Review Engineer 1",
+      "parentRoleId": "fleet-ciso",
+      "promptTemplate": "profile-agent-init",
+      "seedDir": "fleet/tentacles/security-review-engineer-1",
+      "kind": "profile",
+      "agentProvider": "codex"
+    },
+    {
+      "id": "security-review-engineer-2",
+      "name": "Security Review Engineer 2",
+      "parentRoleId": "fleet-ciso",
+      "promptTemplate": "profile-agent-init",
+      "seedDir": "fleet/tentacles/security-review-engineer-2",
+      "kind": "profile",
+      "agentProvider": "codex"
     }
   ],
   "specialists": {

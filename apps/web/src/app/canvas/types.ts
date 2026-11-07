@@ -21,6 +21,8 @@ export type GraphNode = {
   agentState?: AgentState;
   agentRuntimeState?: AgentRuntimeState;
   waitingToolName?: string;
+  logState?: string;
+  lifecycleState?: string;
   hasUserPrompt?: boolean;
   workspaceMode?: TentacleWorkspaceMode;
   parentTerminalId?: string;

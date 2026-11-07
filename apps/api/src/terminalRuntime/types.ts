@@ -61,7 +61,7 @@ export type TerminalSession = {
   isBootstrapCommandSent: boolean;
   scrollbackChunks: string[];
   scrollbackBytes: number;
-  statePollTimer?: ReturnType<typeof setInterval>;
+  statePollTimer?: ReturnType<typeof setInterval> | undefined;
   idleCloseTimer?: ReturnType<typeof setTimeout> | undefined;
   debugLog?: WriteStream;
   transcriptLog?: WriteStream | undefined;
@@ -79,7 +79,24 @@ export type TerminalSession = {
   lastToolName?: string | undefined;
   bootstrapAt?: number;
   lastPtyOutputAt?: number;
-  initialPromptPollTimer?: ReturnType<typeof setInterval>;
+  initialPromptPollTimer?: ReturnType<typeof setInterval> | undefined;
+  /** P33 */
+  p33bTyped?: { at: number; text: string };
+  p33Pending?: {
+    at: number;
+    text: string;
+    turnId?: string;
+    source?: "typed";
+    retried?: boolean;
+    timer?: ReturnType<typeof setTimeout> | undefined;
+  };
+  deliveryBlocked?: { reason: string; at: string; text?: string };
+  blockedDeliveryCount?: number;
+  pendingComposerSubmit?: boolean;
+  claudeTurnPending?: boolean;
+  codexProviderThreadId?: string;
+  codexResumeThreadId?: string;
+  claudeResumeSessionId?: string;
 };
 
 export type TerminalNameOrigin = "generated" | "user" | "prompt";
@@ -105,9 +122,16 @@ export type PersistedTerminal = {
   createdAt: string;
   workspaceMode: TentacleWorkspaceMode;
   agentProvider?: TerminalAgentProvider;
+  /** Last authenticated Codex thread reported by the provider lifecycle bridge. */
+  codexThreadId?: string;
+  /** Operator-recorded Claude Code session id used by resumeTerminal for claude-code seats. */
+  claudeSessionId?: string;
+  /** P42: prior provider session ids archived on a fresh start (audit / restore). */
+  previousSessionIds?: Array<{ at: string; codexThreadId?: string; claudeSessionId?: string }>;
   initialPrompt?: string;
   initialInputDraft?: string;
   lastActiveAt?: string;
+  startedAt?: string;
   parentTerminalId?: string;
   /** String-only durable metadata for registered profile/service identities. */
   metadata?: Record<string, string>;

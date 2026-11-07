@@ -7,11 +7,12 @@ import {
 } from "../src/app/hotkeys";
 
 describe("hotkeys helpers", () => {
-  it("parses primary nav keys from 1 to 5", () => {
+  it("P31: maps keys 1-4 to the visible nav items in display order", () => {
     expect(parsePrimaryNavKey("1")).toBe(1);
-    expect(parsePrimaryNavKey("2")).toBe(2);
-    expect(parsePrimaryNavKey("3")).toBe(3);
-    expect(parsePrimaryNavKey("5")).toBe(5);
+    expect(parsePrimaryNavKey("2")).toBe(3);
+    expect(parsePrimaryNavKey("3")).toBe(4);
+    expect(parsePrimaryNavKey("4")).toBe(5);
+    expect(parsePrimaryNavKey("5")).toBeNull();
   });
 
   it("returns null for unsupported nav keys", () => {
